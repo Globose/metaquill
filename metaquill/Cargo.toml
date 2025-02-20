@@ -1,0 +1,10 @@
+[package]
+name = "metaquill"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cargo-license = "0.6.1"
+pdf-extract = "0.8.2"
+lopdf = "0.35.0"
+
