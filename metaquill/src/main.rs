@@ -2,8 +2,7 @@ use load::load_pdf;
 use std::env;
 use lopdf::{Document, Object};
 
-use std::collections::HashMap;
-use serde_json:: {json,Value};
+use serde_json:: json;
 use json_format1::json_format;
 
 use encoding_rs::WINDOWS_1252;
