@@ -627,6 +627,8 @@ dependencies = [
  "lopdf 0.35.0",
  "pdf-extract",
  "regex",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
