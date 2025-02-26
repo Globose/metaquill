@@ -1,8 +1,13 @@
 use load::load_pdf;
 use std::env;
 use lopdf::{Document, Object};
+
+use std::collections::HashMap;
+use serde_json:: {json,Value};
+
 use encoding_rs::WINDOWS_1252;
 use regex::Regex;
+
 
 mod load;
 
@@ -72,6 +77,12 @@ fn print_metadata(metadata: &mut PDFStruct){
 fn main() {
     // Collect arguments
     let args : Vec<String> = env::args().collect();
+    let key_name = "ListNumbers"; // This is a test for json_format file. this is a key
+    let input_value = [3,2,1]; // This is a value
+
+    """here we print the json as a string"""
+    let x = json_format(key_name, json!(input_value));
+    println!("{}",serde_json::to_string_pretty(&x).unwrap());
     
     // temporary, more args will be accepted later on
     if args.len() != 2{
