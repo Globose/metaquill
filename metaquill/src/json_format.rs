@@ -4,10 +4,6 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use serde_json::{json, Value};
 
-
-
-
-
 fn make_json(key: &str, value: Value) -> Value {
     let mut json = HashMap::new();
     json.insert(key.to_string(),value);
@@ -23,11 +19,10 @@ pub fn export_json(pdf_metadata : &PDFStruct){
     let json_value = make_json(key_name, json!(input_value));
     println!("{}", serde_json::to_string_pretty(&json_value).unwrap());
 
-  //  if let Err(e) = create_file(json_value) {
-   //     eprintln!("Error creating file: {}", e);
-   // }
+   if let Err(e) = create_file(json_value) {
+       eprintln!("Error creating file: {}", e);
+   }
 }
-
 
 pub fn create_file(value: Value) -> std::io::Result<()> {
     let file = File::create("output.json")?;
