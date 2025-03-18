@@ -31,7 +31,7 @@ pub fn fetch_metadata(document : Document, filepath : String) -> PDFStruct{
     collect_title_and_author(&document, &mut metadata);
 
     // Print the PDF metadata
-    print_metadata(&mut metadata);
+    // print_metadata(&mut metadata);
 
     return metadata;
 }
