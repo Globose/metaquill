@@ -1,5 +1,6 @@
 use load::load_pdf;
 use metadata::fetch_metadata;
+use text_parser::text_to_metadata;
 use json_format::export_json;
 use metadata::PDFStruct;
 use std::env;
@@ -8,6 +9,7 @@ use lopdf::Document;
 mod json_format;
 mod metadata;
 mod load;
+mod text_parser;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -28,7 +30,10 @@ fn main() {
     };
 
     // Fetch metadata, create JSON
-    let pdf_metadata: PDFStruct = fetch_metadata(document, filepath);
+    let pdf_metadata: PDFStruct = fetch_metadata(&document, filepath);
     export_json(&pdf_metadata);
+
+    // Text to metadata
+    text_to_metadata(&document);
 }
 

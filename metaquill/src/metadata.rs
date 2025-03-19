@@ -19,7 +19,7 @@ pub fn decode_bytes(bytes: &[u8]) -> String {
     }
 }
 
-pub fn fetch_metadata(document : Document, filepath : String) -> PDFStruct{
+pub fn fetch_metadata(document : &Document, filepath : String) -> PDFStruct{
     // Create a struct for metadata
     let mut metadata = PDFStruct {
         path: filepath.clone(),
