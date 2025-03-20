@@ -74,12 +74,12 @@ fn split_authors(input: &str) -> Vec<String> {
         .collect()
 }
 
-fn print_metadata(metadata: &mut PDFStruct){
-    println!("PDF Metadata:");
-    println!("Filepath: {}", metadata.path);
-    println!("Title: {}", metadata.title);
-    println!("Authors: {:?}", metadata.author);
-}
+// fn print_metadata(metadata: &mut PDFStruct){
+//     println!("PDF Metadata:");
+//     println!("Filepath: {}", metadata.path);
+//     println!("Title: {}", metadata.title);
+//     println!("Authors: {:?}", metadata.author);
+// }
 
 
 
