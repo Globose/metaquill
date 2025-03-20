@@ -1,27 +1,33 @@
-use std::collections::HashMap;
-use crate::metadata::PDFStruct;
+use crate::call::Metadata;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use serde_json::{json, Value};
 
-fn make_json(key: &str, value: Value) -> Value {
-    let mut json = HashMap::new();
-    json.insert(key.to_string(),value);
-    serde_json::to_value(json).unwrap()
-}
 
-pub fn export_json(pdf_metadata : &PDFStruct){
-    // Prepare the data for JSON formatting
-    let key_name = "Metadata";  // This is a test key
-    let input_value = [pdf_metadata.title.clone(), pdf_metadata.author.join(" ")];  // Combine title and authors
+pub fn export_json(extracted_meta: &Metadata) {
+    // Prepare structured metadata for JSON output
+    let json_value = json!({
+        "Title": extracted_meta.title,
+        "Authors": extracted_meta.authors,
+        "DOI": extracted_meta.doi,
+        "Score": extracted_meta.score,
+        "Publisher": extracted_meta.publisher,
+        "Journal": extracted_meta.journal,
+        "Year": extracted_meta.year,
+        "Volume": extracted_meta.volume,
+        "Issue": extracted_meta.issue,
+        "Pages": extracted_meta.pages,
+        "ISSN": extracted_meta.issn,
+        "URL": extracted_meta.url,
+    });
 
-    // Print the JSON output
-    let json_value = make_json(key_name, json!(input_value));
+    // Print JSON to console in a readable format
     println!("{}", serde_json::to_string_pretty(&json_value).unwrap());
 
-   if let Err(e) = create_file(json_value) {
-       eprintln!("Error creating file: {}", e);
-   }
+    // Save JSON to a file
+    if let Err(e) = create_file(json_value) {
+        eprintln!("Error creating file: {}", e);
+    }
 }
 
 pub fn create_file(value: Value) -> std::io::Result<()> {
