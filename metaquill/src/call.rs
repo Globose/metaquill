@@ -60,19 +60,26 @@ fn extract_authors(json: &Value) -> String {
 
 
 pub async fn call(pdf_metadata: &PDFStruct) -> Result<VecDeque<Metadata>, Box<dyn Error>>  {
-    // Encodes the title to url format
-    let title_query = encode(&pdf_metadata.title.trim());
-    let binding = "".to_string();
-    // Encodes the first author to url format
-    let author_query = encode(pdf_metadata.author.get(0).unwrap_or(&binding).trim());
 
-    // Request url with both title and author or only title
-    let request_url = if author_query.is_empty() || author_query == "N/A" {
+    let title_query = encode(&pdf_metadata.title.trim());
+
+    let binding = "".to_string();
+    let author_raw = pdf_metadata.author.get(0).unwrap_or(&binding).trim();
+    
+    // ✅ Only encode `author_raw` if it is not `"N/A"`
+    let author_query = if author_raw == "N/A" || author_raw.is_empty() {
+        "".to_string()
+    } else {
+        encode(author_raw).into_owned()
+    };
+    
+    // ✅ Construct the request URL correctly
+    let request_url = if author_query.is_empty() {
         format!("https://api.crossref.org/works?query.bibliographic={}", title_query)
     } else {
         format!(
             "https://api.crossref.org/works?query.bibliographic={}&query.author={}",
-            title_query, encode(&author_query)
+            title_query, author_query
         )
     };
 
