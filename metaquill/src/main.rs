@@ -1,5 +1,6 @@
 use load::load_pdf;
 use metadata::fetch_metadata;
+use text_parser::text_to_metadata;
 use json_format::export_json;
 use metadata::PDFStruct;
 use std::env;
@@ -10,7 +11,11 @@ use tokio::runtime::Runtime; // Import Tokio runtime
 mod json_format;
 mod metadata;
 mod load;
+
+mod text_parser;
+
 mod call;
+
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -31,7 +36,12 @@ fn main() {
     };
 
     // Fetch metadata, create JSON
-    let pdf_metadata: PDFStruct = fetch_metadata(document, filepath);
+
+    let pdf_metadata: PDFStruct = fetch_metadata(&document, filepath);
+  
+    // Text to metadata
+    text_to_metadata(&document);
+
 
     if !pdf_metadata.title.trim().is_empty() && pdf_metadata.title.trim() != "N/A" {
         let runtime = Runtime::new().expect("Failed to create Tokio runtime");
