@@ -16,7 +16,7 @@ struct TextObject{
     text: String,
 }
 
-pub fn text_to_metadata(doc: &Document) {
+pub fn text_to_metadata(doc: &Document) -> String{
     init_journal_set("elsevier.txt");
 
     // RUST_LOG=info cargo run
@@ -31,18 +31,18 @@ pub fn text_to_metadata(doc: &Document) {
     // Load Object data for page 1
     let Some(&page_id) = doc.get_pages().get(&1) else{
         println!("Failed to get page id for page 1");
-        return;
+        return "".to_string();
     };
 
     // Fetch content from page 1
     let Ok(page_content) = doc.get_page_content(page_id) else {
         println!("Failed to get page content");
-        return;
+        return "".to_string();
     };
 
     let Ok(content) = Content::decode(&page_content) else{
         println!("Failed to decode content");
-        return;
+        return "".to_string();
     };
 
     // Iterate over all objects on the page
@@ -204,8 +204,9 @@ pub fn text_to_metadata(doc: &Document) {
     
     if let Some(first_obj) = text_objects.first() {
         println!("Assumed title: >{}<", first_obj.text);
+        return first_obj.text.to_string();
     }
-    return;
+    return "".to_string();
 }
 
 fn init_journal_set<P: AsRef<Path>>(filename: P) {

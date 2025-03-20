@@ -37,10 +37,13 @@ fn main() {
 
     // Fetch metadata, create JSON
 
-    let pdf_metadata: PDFStruct = fetch_metadata(&document, filepath);
+    let mut pdf_metadata: PDFStruct = fetch_metadata(&document, filepath);
   
     // Text to metadata
-    text_to_metadata(&document);
+    let temp_title = text_to_metadata(&document);
+    if pdf_metadata.title.is_empty() || pdf_metadata.title == "N/A" {
+        pdf_metadata.title = temp_title;
+    }
 
 
     if !pdf_metadata.title.trim().is_empty() && pdf_metadata.title.trim() != "N/A" {
