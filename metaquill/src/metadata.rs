@@ -31,7 +31,7 @@ pub fn fetch_metadata(document : Document, filepath : String) -> PDFStruct{
     collect_title_and_author(&document, &mut metadata);
 
     // Print the PDF metadata
-    print_metadata(&mut metadata);
+    // print_metadata(&mut metadata);
 
     return metadata;
 }
@@ -74,12 +74,12 @@ fn split_authors(input: &str) -> Vec<String> {
         .collect()
 }
 
-fn print_metadata(metadata: &mut PDFStruct){
-    println!("PDF Metadata:");
-    println!("Filepath: {}", metadata.path);
-    println!("Title: {}", metadata.title);
-    println!("Authors: {:?}", metadata.author);
-}
+// fn print_metadata(metadata: &mut PDFStruct){
+//     println!("PDF Metadata:");
+//     println!("Filepath: {}", metadata.path);
+//     println!("Title: {}", metadata.title);
+//     println!("Authors: {:?}", metadata.author);
+// }
 
 
 
