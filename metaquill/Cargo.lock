@@ -1106,6 +1106,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "strsim",
  "tokio",
  "urlencoding",
 ]
