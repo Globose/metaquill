@@ -116,7 +116,7 @@ pub async fn call(pdf_metadata: &PDFStruct) -> Result<Vec<Metadata>, Box<dyn Err
     // Check if any results are returned, if not return error to start ocr
     let total_results = json["message"]["total-results"].as_i64().unwrap_or(0);
     if total_results == 0 {
-        return Err("No metadata found. Try OCR extraction.".into());
+        return Err("No metadata found.".into());
     }
 
     let mut metadata_list = Vec::new();

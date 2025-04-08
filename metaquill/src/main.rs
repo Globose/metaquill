@@ -1,7 +1,7 @@
 use load::load_pdf;
 use metadata::fetch_metadata;
 use text_parser::text_to_metadata;
-use json_format::export_json;
+use json_format::{export_json, export_json_metadata};
 use metadata::PDFStruct;
 use std::env;
 use lopdf::Document;
@@ -53,18 +53,19 @@ fn main() {
                 if let Some(first_metadata) = metadata_list.get(0) {
                     export_json(first_metadata); // Export the first metadata entry
                 } else {
-                    println!("No valid metadata found.");
+                    export_json_metadata(&pdf_metadata);
                 }
             }
             Err(e) => {
                 eprintln!("Error retrieving metadata: {}", e);
-                if e.to_string().contains("Try OCR extraction") {
-                    println!("🔍 Attempting OCR-based title extraction...");
+                if e.to_string().contains("No metadata found") {
+                    export_json_metadata(&pdf_metadata);
                 }
             }
         }
     } else {
         println!("No title found. Skipping Crossref API call.");
+        export_json_metadata(&pdf_metadata);
     }
 
 }

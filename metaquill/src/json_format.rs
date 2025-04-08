@@ -2,6 +2,8 @@ use crate::call::Metadata;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use serde_json::{json, Value};
+use crate::metadata::PDFStruct;
+
 
 
 pub fn export_json(extracted_meta: &Metadata) {
@@ -19,6 +21,23 @@ pub fn export_json(extracted_meta: &Metadata) {
         "Pages": extracted_meta.pages,
         "ISSN": extracted_meta.issn,
         "URL": extracted_meta.url,
+        "Confidence": extracted_meta.title_confidence,
+    });
+
+    // Print JSON to console in a readable format
+    println!("{}", serde_json::to_string_pretty(&json_value).unwrap());
+
+    // Save JSON to a file
+    if let Err(e) = create_file(json_value) {
+        eprintln!("Error creating file: {}", e);
+    }
+}
+
+pub fn export_json_metadata(pdf_metadata : &PDFStruct){
+    // Prepare the data for JSON formatting
+    let json_value = json!({
+        "Title": pdf_metadata.title.clone(),
+        "Authors": pdf_metadata.author.clone(),
     });
 
     // Print JSON to console in a readable format
