@@ -7,6 +7,8 @@ use std::env;
 use lopdf::Document;
 use call::call;
 use tokio::runtime::Runtime; // Import Tokio runtime
+use std::fs;
+use std::path::Path;
 
 mod json_format;
 mod metadata;
@@ -19,6 +21,7 @@ mod call;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
+    env_logger::init();
 
     if args.len() != 2 {
         println!("Failed to read PDF: No PDF file provided");
@@ -27,6 +30,30 @@ fn main() {
 
     // Load the PDF file
     let filepath: String = args[1].clone();
+    let path = Path::new(&args[1]);
+
+    if path.is_dir() {
+        println!("It's a directory.");
+        let entries = std::fs::read_dir(path).unwrap();
+        for entry in entries {
+            if let Ok(entry) = entry {
+                let file_path = entry.path();
+                let file_path_str = file_path.to_str().unwrap().to_string();
+                data_extract(file_path_str);
+            }
+        }
+    } else {
+        println!("It's a file.");
+        data_extract(filepath);
+    }
+
+    
+
+}
+
+
+
+fn data_extract (filepath: String) {
     let document: Document = match load_pdf(&filepath) {
         Ok(doc) => doc,
         Err(e) => {
@@ -68,4 +95,3 @@ fn main() {
     }
 
 }
-

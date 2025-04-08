@@ -17,10 +17,11 @@ struct TextObject{
 }
 
 pub fn text_to_metadata(doc: &Document) -> String{
-    init_journal_set("elsevier.txt");
+    if ELSEVIER_SET.get().is_none() {
+        init_journal_set("elsevier.txt");
+    }
 
     // RUST_LOG=info cargo run
-    env_logger::init();
 
     let mut text_objects : Vec<TextObject> = Vec::new();
     let mut current_font_size_value : f32 = 1.0;
