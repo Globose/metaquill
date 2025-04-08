@@ -7,6 +7,8 @@ use std::env;
 use lopdf::Document;
 use call::call;
 use tokio::runtime::Runtime; // Import Tokio runtime
+use std::fs;
+use std::path::Path;
 
 mod json_format;
 mod metadata;
@@ -27,6 +29,22 @@ fn main() {
 
     // Load the PDF file
     let filepath: String = args[1].clone();
+    let path = Path::new(&args[1]);
+
+    if path.is_dir() {
+        println!("It's a directory.");
+    } else {
+        println!("It's a file.");
+        data_extract(filepath);
+    }
+
+    
+
+}
+
+
+
+fn data_extract (filepath: String) {
     let document: Document = match load_pdf(&filepath) {
         Ok(doc) => doc,
         Err(e) => {
@@ -68,4 +86,3 @@ fn main() {
     }
 
 }
-
