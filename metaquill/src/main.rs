@@ -34,14 +34,7 @@ fn main() {
 
     if path.is_dir() {
         println!("It's a directory.");
-        let entries = std::fs::read_dir(path).unwrap();
-        for entry in entries {
-            if let Ok(entry) = entry {
-                let file_path = entry.path();
-                let file_path_str = file_path.to_str().unwrap().to_string();
-                data_extract(file_path_str);
-            }
-        }
+        directory_fn(path);
     } else {
         println!("It's a file.");
         data_extract(filepath);
@@ -51,6 +44,21 @@ fn main() {
 
 }
 
+fn directory_fn (path: &Path) {
+    let entries = std::fs::read_dir(path).unwrap();
+    for entry in entries {
+        if let Ok(entry) = entry {
+            let file_path = entry.path();
+            let file_path_str = file_path.to_str().unwrap().to_string();
+            let path_directory = Path::new(&file_path_str);
+            if path_directory.is_dir() {
+                directory_fn (path_directory);
+            } else {
+                data_extract(file_path_str);
+            }
+        }
+    }
+}
 
 
 fn data_extract (filepath: String) {
