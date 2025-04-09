@@ -37,7 +37,7 @@ fn main() {
 
     // Fetch metadata, create JSON
 
-    let mut pdf_metadata: PDFStruct = fetch_metadata(&document, filepath);
+    let mut pdf_metadata: PDFStruct = fetch_metadata(&document, filepath.clone());
   
     // Text to metadata
     let temp_title = text_to_metadata(&document);
@@ -51,7 +51,12 @@ fn main() {
         match runtime.block_on(call(&pdf_metadata)) {
             Ok(metadata_list) => {
                 if let Some(first_metadata) = metadata_list.get(0) {
-                    export_json(first_metadata); // Export the first metadata entry
+                    if first_metadata.title_confidence >= 70.0 {
+                    export_json(first_metadata, filepath); // Export the first metadata entry
+                    } else {
+                        println!("Title from API call not close enough");
+                    }
+
                 } else {
                     export_json_metadata(&pdf_metadata);
                 }

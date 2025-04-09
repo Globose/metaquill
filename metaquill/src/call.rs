@@ -1,8 +1,10 @@
-use reqwest;
+use reqwest::Client;
 use serde_json::Value;
 use crate::metadata::PDFStruct;
 use std::error::Error;
 use urlencoding::encode; // Import URL encoding
+use std::time::Duration;
+use tokio::time::timeout;
 
 use strsim::levenshtein; // Comparing two string
 
@@ -75,6 +77,46 @@ pub fn compare_results(result_title: &str, search_title: &str) -> f64 {
     return confidence;
 }
 
+pub async fn fetch_with_retry(request_url: &str) -> Result<Value, Box<dyn std::error::Error>> {
+    let client = Client::new();
+    let mut attempts = 0;
+
+    while attempts < 2 {
+        attempts += 1;
+
+        // Set max wait time (5 seconds)
+        let result = timeout(Duration::from_secs(5), async {
+            let response = client.get(request_url).send().await?;
+            let text = response.text().await?;
+            Ok::<_, reqwest::Error>(text)
+        })
+        .await;
+
+        match result {
+            Ok(Ok(body)) => {
+                let json: Value = serde_json::from_str(&body)?;
+                if json["status"] != "ok" {
+                    eprintln!("Crossref API returned an error: {:?}", json);
+                    return Err("Crossref API Error".into());
+                }
+                return Ok(json);
+            }
+            Ok(Err(e)) => {
+                eprintln!("Request failed: {}", e);
+            }
+            Err(_) => {
+                eprintln!("Request timed out on attempt {}", attempts);
+            }
+        }
+
+        // Retry once if first attempt fails
+        if attempts < 2 {
+            eprintln!("Retrying...");
+        }
+    }
+
+    Err("Request failed after retry".into())
+}
 
 
 pub async fn call(pdf_metadata: &PDFStruct) -> Result<Vec<Metadata>, Box<dyn Error>>  {
@@ -104,8 +146,7 @@ pub async fn call(pdf_metadata: &PDFStruct) -> Result<Vec<Metadata>, Box<dyn Err
 
     println!("🔍 API Request URL: {}", request_url);
 
-    let response = reqwest::get(&request_url).await?.text().await?;
-    let json: Value = serde_json::from_str(&response)?;
+    let json = fetch_with_retry(&request_url).await?;
 
     // Check status of the response return error if not ok
     if json["status"] != "ok" {
