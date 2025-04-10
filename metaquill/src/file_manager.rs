@@ -2,11 +2,16 @@ use crate::call::Metadata;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use serde_json::{json, Value};
+use lopdf::{Document, Error};
 use crate::metadata::PDFStruct;
 
+pub fn load_pdf(filepath : &str) -> Result<Document, Error> {
+    // println!("Loading PDF {filepath}");
+    let document = Document::load(filepath)?;
+    return Ok(document);
+}
 
-
-pub fn export_json(extracted_meta: &Metadata, filepath: String) {
+pub fn export_json(extracted_meta: &Metadata, filepath: &str) {
     // Prepare structured metadata for JSON output
     let json_value = json!({
         "Title": extracted_meta.title,
@@ -22,7 +27,7 @@ pub fn export_json(extracted_meta: &Metadata, filepath: String) {
         "ISSN": extracted_meta.issn,
         "URL": extracted_meta.url,
         "Title Confidence": extracted_meta.title_confidence.to_string() + "%",
-        "PDF Name": split_name(filepath),
+        "PDF Name": split_name(filepath.to_string()),
     });
 
     // Print JSON to console in a readable format
@@ -48,7 +53,7 @@ pub fn export_json_metadata(pdf_metadata : &PDFStruct){
     // Prepare the data for JSON formatting
 
     let json_value = json!({
-        "Title": pdf_metadata.title.clone(),
+        "Title": pdf_metadata.metadata_title.clone(),
         "Authors": pdf_metadata.author.clone(),
         "DOI": "N/A",
         "API Score": "N/A",
