@@ -38,7 +38,7 @@ fn main() {
     // Fetch metadata, create JSON
 
     let mut pdf_metadata: PDFStruct = fetch_metadata(&document, filepath.clone());
-  
+
     // Text to metadata
     let temp_title = text_to_metadata(&document);
     if pdf_metadata.title.is_empty() || pdf_metadata.title == "N/A" {
@@ -47,10 +47,12 @@ fn main() {
 
 
     if !pdf_metadata.title.trim().is_empty() && pdf_metadata.title.trim() != "N/A" {
+        // Create runtime to let the program wait for a response
         let runtime = Runtime::new().expect("Failed to create Tokio runtime");
         match runtime.block_on(call(&pdf_metadata)) {
             Ok(metadata_list) => {
                 if let Some(first_metadata) = metadata_list.get(0) {
+                    // Result cutoff, if no results have a title confidence 70% or higher ignore the results
                     if first_metadata.title_confidence >= 70.0 {
                     export_json(first_metadata, filepath); // Export the first metadata entry
                     } else {
