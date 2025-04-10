@@ -21,7 +21,6 @@ mod call;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    env_logger::init();
 
     if args.len() != 2 {
         println!("Failed to read PDF: No PDF file provided");
