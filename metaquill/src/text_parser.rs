@@ -1,5 +1,4 @@
 use lopdf::{content::Content, Document};
-use log:: info;
 use encoding_rs::WINDOWS_1252;
 
 use std::collections::HashSet;
@@ -50,13 +49,12 @@ pub fn text_to_metadata(doc: &Document) -> String{
     for operation in content.operations {
         match operation.operator.as_ref() {
             "Tf" => { // Change of font settings
-                let Some(font_ref) = operation.operands.get(0) else {
-                    continue;
-                };
+                // let Some(font_ref) = operation.operands.get(0) else {
+                //     continue;
+                // };
                 let Some(font_size_obj) = operation.operands.get(1) else{
                     continue;
                 };
-                info!("Tf, Len = {}, ref = {:?}, size = {:?}", operation.operands.len(), font_ref, font_size_obj);
 
                 let Ok(new_font_size_value) = font_size_obj.as_float() else{
                     continue;
@@ -69,7 +67,6 @@ pub fn text_to_metadata(doc: &Document) -> String{
                     continue;
                 }
                 current_real_font_size = new_real_font_size;
-                info!("New real font size: {}", current_real_font_size);
 
                 let new_text_object = TextObject{
                     order: order_count,
@@ -94,17 +91,14 @@ pub fn text_to_metadata(doc: &Document) -> String{
                     last_obj.text += &decoded;
                 } 
 
-                info!("Tj: str: {}", decoded);
             } // An array of text content
             "TJ" => {
-                info!("--TJ--");
                 let Some(array_obj) = operation.operands.get(0) else{
                     continue;
                 };
                 let Ok(array) = array_obj.as_array() else{
                     continue;
                 };
-                info!("{:?}", array);
                 for item in array{
                     let Ok(char_array) = item.as_str() else{
                         let Ok(spacing_value) = item.as_float() else{
@@ -126,7 +120,6 @@ pub fn text_to_metadata(doc: &Document) -> String{
                 }
             }
             "Tm" =>{ // Change in scaling
-                info!("Tm, Oplen = {}", operation.operands.len());
                 text_scaler = operation.operands[3].as_float().unwrap_or(1.0);
 
                 // calculate new real font size
@@ -135,7 +128,6 @@ pub fn text_to_metadata(doc: &Document) -> String{
                     continue;
                 }
                 current_real_font_size = new_real_font_size;
-                info!("Scaled new font size: {}", current_real_font_size);
 
                 let new_text_object = TextObject{
                     order: order_count,
@@ -146,36 +138,22 @@ pub fn text_to_metadata(doc: &Document) -> String{
                 order_count += 1;
             }
             "TD" | "Tw" => { // Add space
-                info!("Line Break {}", operation.operator);
-                info!("{:?}", operation.operands);
                 if let Some(last_obj) = text_objects.last_mut(){
                     last_obj.text += " ";
                 } 
             }
             "Tc" => {
-                info!("Tc: {}", operation.operands.len());
-                let tc = operation.operands[0].as_float().unwrap_or(1.0);
-                info!("t_info: {}", tc);
+                // let tc = operation.operands[0].as_float().unwrap_or(1.0);
             }
             "TL" => {
-                info!("TL: {}", operation.operands.len());
-                let tl = operation.operands[0].as_float().unwrap_or(1.0);
-                info!("tl_info: {}", tl);
+                // let tl = operation.operands[0].as_float().unwrap_or(1.0);
                 if let Some(last_obj) = text_objects.last_mut(){
                     last_obj.text += " ";
                 }
             }
             "Td" => {
-                info!("Td: {}", operation.operands.len());
-                let tdx = operation.operands[0].as_float().unwrap_or(1.0);
+                // let tdx = operation.operands[0].as_float().unwrap_or(1.0);
                 let tdy = operation.operands[1].as_float().unwrap_or(1.0);
-                info!("td_info: {}, {}", tdx, tdy);
-
-                // if tdx > 0.8{
-                //     if let Some(last_obj) = text_objects.last_mut(){
-                //         last_obj.text += " ";
-                //     }
-                // }
                 if tdy < -1.0{
                     if let Some(last_obj) = text_objects.last_mut(){
                         last_obj.text += " ";
@@ -183,25 +161,14 @@ pub fn text_to_metadata(doc: &Document) -> String{
                 }
             }
             _ => { // Default
-                info!("U - {}, size = {}", operation.operator, operation.operands.len());
             }
         }
     }
     
-    info!("No. of text_objects = {}", text_objects.len());
     text_objects.sort_by(|x,y| y.font_size.partial_cmp(&x.font_size).unwrap());
     text_objects.retain(|txt_obj| txt_obj.text.len() > 17);
     text_objects.retain(|txt_obj| !contains_journal(&txt_obj.text));
     text_objects.retain(|obj| !obj.text.contains("Authorized licensed use limited to"));
-    
-    // text_objects.retain(|txt_obj| txt_obj.order < 10);
-    for txt_obj in &text_objects{
-        info!("---");
-        info!("{}", txt_obj.order);
-        info!("{}", txt_obj.font_size);
-        info!("{}", txt_obj.text.len());
-        info!("{}", txt_obj.text);
-    }
     
     if let Some(first_obj) = text_objects.first() {
         println!("Assumed title: >{}<", first_obj.text);
