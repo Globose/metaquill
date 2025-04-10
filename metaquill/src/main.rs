@@ -1,7 +1,7 @@
 use load::load_pdf;
 use metadata::fetch_metadata;
 use text_parser::text_to_metadata;
-use json_format::export_json;
+use json_format::{export_json, export_json_metadata};
 use metadata::PDFStruct;
 use std::env;
 use lopdf::Document;
@@ -71,8 +71,8 @@ fn data_extract (filepath: String) {
 
     // Fetch metadata, create JSON
 
-    let mut pdf_metadata: PDFStruct = fetch_metadata(&document, filepath);
-  
+    let mut pdf_metadata: PDFStruct = fetch_metadata(&document, filepath.clone());
+
     // Text to metadata
     let temp_title = text_to_metadata(&document);
     if pdf_metadata.title.is_empty() || pdf_metadata.title == "N/A" {
@@ -81,24 +81,32 @@ fn data_extract (filepath: String) {
 
 
     if !pdf_metadata.title.trim().is_empty() && pdf_metadata.title.trim() != "N/A" {
+        // Create runtime to let the program wait for a response
         let runtime = Runtime::new().expect("Failed to create Tokio runtime");
         match runtime.block_on(call(&pdf_metadata)) {
             Ok(metadata_list) => {
                 if let Some(first_metadata) = metadata_list.get(0) {
-                    export_json(first_metadata); // Export the first metadata entry
+                    // Result cutoff, if no results have a title confidence 70% or higher ignore the results
+                    if first_metadata.title_confidence >= 70.0 {
+                    export_json(first_metadata, filepath); // Export the first metadata entry
+                    } else {
+                        println!("Title from API call not close enough");
+                    }
+
                 } else {
-                    println!("No valid metadata found.");
+                    export_json_metadata(&pdf_metadata);
                 }
             }
             Err(e) => {
                 eprintln!("Error retrieving metadata: {}", e);
-                if e.to_string().contains("Try OCR extraction") {
-                    println!("🔍 Attempting OCR-based title extraction...");
+                if e.to_string().contains("No metadata found") {
+                    export_json_metadata(&pdf_metadata);
                 }
             }
         }
     } else {
         println!("No title found. Skipping Crossref API call.");
+        export_json_metadata(&pdf_metadata);
     }
 
 }

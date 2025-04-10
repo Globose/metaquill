@@ -1,10 +1,14 @@
-use reqwest;
+use reqwest::Client;
 use serde_json::Value;
 use crate::metadata::PDFStruct;
 use std::error::Error;
 use urlencoding::encode; // Import URL encoding
-use std::collections::VecDeque;
+use std::time::Duration;
+use tokio::time::timeout;
 
+use strsim::levenshtein; // Comparing two string
+
+// Struct to collect all metadata
 pub struct Metadata {
     pub title: String,
     pub doi: String,
@@ -18,6 +22,7 @@ pub struct Metadata {
     pub pages: String,
     pub issn: String,
     pub url: String,
+    pub title_confidence: f64,
 }
 
 /// Extracts a string field from JSON safely
@@ -57,23 +62,84 @@ fn extract_authors(json: &Value) -> String {
         .unwrap_or_else(|| "Unknown Authors".to_string())
 }
 
+/// Use levenshein distance formula to determine similarity between strings
+pub fn compare_results(result_title: &str, search_title: &str) -> f64 {
+    // Normalize: lowercase and trim both strings
+    let result = result_title.trim().to_lowercase();
+    let search = search_title.trim().to_lowercase();
+
+    if result.is_empty() || search.is_empty() {
+        return 0.0;
+    }
+
+    let distance = levenshtein(&result, &search);
+    let max_len = result.len().max(search.len()) as f64;
+    //
+    let confidence = ((1.0 - distance as f64 / max_len) * 100.0).max(0.0);
+    return confidence;
+}
+
+pub async fn fetch_with_retry(request_url: &str) -> Result<Value, Box<dyn std::error::Error>> {
+    let client = Client::new();
+    let mut attempts = 0;
+    // Sets attempts to 2
+    while attempts < 2 {
+        attempts += 1;
+
+        // Set max wait time (5 seconds)
+        let result = timeout(Duration::from_secs(5), async {
+            // API call
+            let response = client.get(request_url).send().await?;
+            let text = response.text().await?;
+            Ok::<_, reqwest::Error>(text)
+        })
+        .await;
+
+        match result {
+            Ok(Ok(body)) => {
+                let json: Value = serde_json::from_str(&body)?;
+                if json["status"] != "ok" {
+                    eprintln!("Crossref API returned an error: {:?}", json);
+                    return Err("Crossref API Error".into());
+                }
+                return Ok(json);
+            }
+            Ok(Err(e)) => {
+                eprintln!("Request failed: {}", e);
+            }
+            Err(_) => {
+                eprintln!("Request timed out on attempt {}", attempts);
+            }
+        }
+
+        // Retry once if first attempt fails
+        if attempts < 2 {
+            eprintln!("Retrying...");
+        }
+    }
+
+    Err("Request failed after retry".into())
+}
 
 
-pub async fn call(pdf_metadata: &PDFStruct) -> Result<VecDeque<Metadata>, Box<dyn Error>>  {
+pub async fn call(pdf_metadata: &PDFStruct) -> Result<Vec<Metadata>, Box<dyn Error>>  {
 
+    // Extarct title and encode title
+    let title_raw = pdf_metadata.title.trim();
     let title_query = encode(&pdf_metadata.title.trim());
 
     let binding = "".to_string();
+    // Collect first author or set it to empry string if empty
     let author_raw = pdf_metadata.author.get(0).unwrap_or(&binding).trim();
-    
-    // ✅ Only encode `author_raw` if it is not `"N/A"`
+
+    // Only encode author_raw if it is not "N/A" or empty
     let author_query = if author_raw == "N/A" || author_raw.is_empty() {
         "".to_string()
     } else {
         encode(author_raw).into_owned()
     };
-    
-    // ✅ Construct the request URL correctly
+
+    // Construct the request URL
     let request_url = if author_query.is_empty() {
         format!("https://api.crossref.org/works?query.bibliographic={}", title_query)
     } else {
@@ -83,10 +149,10 @@ pub async fn call(pdf_metadata: &PDFStruct) -> Result<VecDeque<Metadata>, Box<dy
         )
     };
 
+    // Print URL for requset (Can be removed if print not wanted)
     println!("🔍 API Request URL: {}", request_url);
 
-    let response = reqwest::get(&request_url).await?.text().await?;
-    let json: Value = serde_json::from_str(&response)?;
+    let json = fetch_with_retry(&request_url).await?;
 
     // Check status of the response return error if not ok
     if json["status"] != "ok" {
@@ -94,18 +160,29 @@ pub async fn call(pdf_metadata: &PDFStruct) -> Result<VecDeque<Metadata>, Box<dy
         return Err("Crossref API Error".into());
     }
 
-    // Check if any results are returned, if not return error to start ocr
+    // Check if any results are returned, if not return error
     let total_results = json["message"]["total-results"].as_i64().unwrap_or(0);
     if total_results == 0 {
-        return Err("No metadata found. Try OCR extraction.".into());
+        return Err("No metadata found.".into());
     }
 
-    let mut metadata_list = VecDeque::new();
+    // Create vector to collect all result
+    let mut metadata_list = Vec::new();
 
     if let Some(items) = json["message"]["items"].as_array() {
         for work in items {
+
+
+        let result_title = extract_array_str(work, "title");
+        let title_confidence = compare_results(&result_title, title_raw);
+
+        // Prints that can be used to easy compare tittles
+        // println!("Found Title: {}. With: {}", result_title, title_raw);
+        // println!("Title Confidence: {:.2}%", title_confidence);
+        // println!("------------------------------");
+
             let metadata = Metadata {
-                title: extract_array_str(work, "title"),
+                title: result_title,
                 doi: extract_str(work, "DOI"),
                 score: work["score"].as_f64().unwrap_or(0.0),
                 authors: extract_authors(work),
@@ -127,11 +204,14 @@ pub async fn call(pdf_metadata: &PDFStruct) -> Result<VecDeque<Metadata>, Box<dy
                 pages: extract_str(work, "page"),
                 issn: extract_array_str(work, "ISSN"),
                 url: extract_str(work, "URL"),
+                title_confidence: title_confidence,
             };
 
-            metadata_list.push_back(metadata);
+            metadata_list.push(metadata);
         }
     }
+    // Sort metadata by title confidence
+    metadata_list.sort_by(|a, b| b.title_confidence.partial_cmp(&a.title_confidence).unwrap_or(std::cmp::Ordering::Equal));
 
     Ok(metadata_list)
 }
