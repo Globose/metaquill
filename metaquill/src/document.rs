@@ -83,8 +83,7 @@ pub fn evaluate_metadata(pdf : &mut PDFStruct){
     }
 
     let distance = compare_results(&pdf.assumed_title, &pdf.metadata_title);
-    
-    if distance > 0.8 {
+    if distance > 80.0 {
         pdf.assumed_title = String::new();
     }
 }
@@ -94,7 +93,10 @@ pub fn read_pdf(filepath: &str){
     let Some(mut pdf) = read_pdf_metadata(filepath) else {
         return;
     };
+    println!("1: MetaTitle = {}, AssumedTitle = {}", pdf.metadata_title, pdf.assumed_title);
     evaluate_metadata(&mut pdf);
+    println!("2: MetaTitle = {}, AssumedTitle = {}", pdf.metadata_title, pdf.assumed_title);
+
     validate_metadata(pdf);
     // println!("Pdf metadata {:?}", pdf);
 }
