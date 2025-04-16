@@ -1,6 +1,6 @@
 use std::io::Read;
 
-use crate::{document::Document, pdf_object::PdfVar, PDFDOC_MAP};
+use crate::{document::{Document, Reader}, pdf_object::PdfVar, PDFDOC_MAP};
 use flate2::read::ZlibDecoder;
 
 
@@ -79,9 +79,9 @@ pub fn png_decode(stream: &Vec<u8>, _predictor: usize, columns: usize) -> Option
 }
 
 /// Decode flate stream
-pub fn decode_flate(doc : &mut Document, start : usize, size : usize) -> Option<Vec<u8>>{
-    doc.it = start;
-    let compressed_data = &doc.doc_u8[doc.it..doc.it + size];
+pub fn decode_flate(rd : &mut Reader, start : usize, size : usize) -> Option<Vec<u8>>{
+    rd.it = start;
+    let compressed_data = &rd.data[rd.it..rd.it + size];
     
     let mut decoder = ZlibDecoder::new(compressed_data);
     let mut output = Vec::new();

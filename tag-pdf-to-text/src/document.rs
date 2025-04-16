@@ -1,6 +1,6 @@
 use std::{fs::{self, read_dir}, io, string::ParseError};
 
-use crate::{decoding::{decode_flate, decode_pdfdoc, decode_pdfdoc_u8, get_256_repr, png_decode}, pdf_object::{cmp_u8, PdfParseError, PdfVar}, print_raw, text_parser::read_page_content};
+use crate::{decoding::{decode_flate, decode_pdfdoc, decode_pdfdoc_u8, get_256_repr, png_decode}, pdf_object::{cmp_u8, parse_object, PdfParseError, PdfVar}, print_raw, text_parser::{get_page_resources, read_page_content}};
 
 #[derive(Debug)]
 struct Trailer{
@@ -22,15 +22,12 @@ struct ObjectRef {
 pub struct Document {
     xref : Vec<ObjectRef>,
     trailer : Trailer,
-    pub doc_u8 : Vec<u8>,
-    pub it : usize,
+    pub reader : Reader,
 }
-
 #[derive(Debug)]
-pub struct Text{
-    position : (u32,u32), // (x,y)
-    font_size : u32,
-    uc_char : Vec<u32>,
+pub struct Reader{
+    pub data : Vec<u8>,
+    pub it : usize, // Current position
 }
 
 #[derive(Debug)]
@@ -70,7 +67,6 @@ const C_INDEX : &str = "Index";
 const C_ENCRYPT : &str = "Encrypt";
 
 impl Document {
-    /// TODO:
     /// Read Text From Page
     pub fn get_text_from_page(&mut self, page_nr : usize) -> Option<String>{
         let Some(page_object) = self.get_page_no(page_nr) else{
@@ -78,6 +74,8 @@ impl Document {
         };
 
         // Get Resources
+        // get_page_resources(self, &page_object);
+        // println!("Ffotun_____");
         
         // Get ids of content
         let Some(page_contents) = page_object.get_dict_value("Contents") else{
@@ -145,49 +143,28 @@ impl Document {
             };
             xref_1 = obj_xref.xref;
             compr_1 = obj_xref.compressed;
-
+            
             if compr_1 != 1{
                 println!("Obj still not uncompressed");
                 return Err(PdfDocError::CompressedObject);
             }
         }
-        
+
         // Parse object
-        let Ok(object) = PdfVar::from(self, xref_1) else{
-            return Err(PdfDocError::PdfParseError);
+        let object = match PdfVar::from(&mut self.reader, xref_1) {
+            Ok(x) => x,
+            Err(e) =>{
+                println!("Error {:?}", e);
+                return Err(PdfDocError::PdfParseError);
+            }
         };
-       
+
         return Ok(object)
-    }
-
-    /// Returns the u8 at the current position in the document. Returns 
-    pub fn byte(&self)->u8{
-        return self.doc_u8[self.it]; 
-    }
-
-    /// Moves the documents position (it) forward until first non whitespace char 
-    pub fn skip_whitespace(&mut self){
-        self.it = skip_whitespace(&self.doc_u8, self.it);
-    }
-
-    /// Moves the position (it) to a new non empty line
-    pub fn next_line(&mut self){
-        while !matches!(self.byte(), 10 | 13){
-            self.it += 1;
-        }
-        while matches!(self.byte(), 10 | 13){
-            self.it += 1;
-        }
     }
 
     /// Returns true if document is encrypted
     pub fn is_encrypted(&mut self) -> bool{
         self.trailer.encrypt != 0
-    }
-
-    /// Returns the size of the document, in number of bytes
-    pub fn size(&self)->usize{
-        self.doc_u8.len()
     }
 
     /// Returns a value from the documents info directory, based on a given key
@@ -220,13 +197,13 @@ impl Document {
         };
         let mut xref_table : Vec<ObjectRef> = Vec::new();
         let mut trailer : Trailer = Trailer { info: 0, root: 0, size: 0, encrypt: 0 };
-        let mut doc = Document{xref : xref_table, trailer, doc_u8, it : 0};
-        
+        let mut doc = Document{xref : xref_table, trailer, reader : Reader { data: doc_u8, it: 0 }};
+
         // Step 1: Look at head, Look for %PDF
-        parse_pdf_version(&mut doc)?;
+        parse_pdf_version(&mut doc.reader)?;
         
         // Step 2: Locate and parse startxref at the end of the file
-        let startxref = read_start_xref(&mut doc)?;
+        let startxref = read_start_xref(&mut doc.reader)?;
 
         // Step 3: Parse the xref-table pointed at by startxref
         parse_xref(&mut doc, startxref, true)?;
@@ -235,16 +212,43 @@ impl Document {
     }
 }
 
+impl Reader {
+    /// Returns the size of the reader data, in number of bytes
+    pub fn size(&self) -> usize{
+        self.data.len()
+    }
+
+    /// Returns the u8 char value at the current position in the reader. 
+    pub fn byte(&self)->u8{
+        return self.data[self.it];
+    }
+
+    /// Moves the documents position (it) forward until first non whitespace char 
+    pub fn skip_whitespace(&mut self){
+        self.it = skip_whitespace(&self.data, self.it);
+    }
+
+    /// Moves the position (it) to a new non empty line
+    pub fn next_line(&mut self){
+        while !matches!(self.byte(), 10 | 13){
+            self.it += 1;
+        }
+        while matches!(self.byte(), 10 | 13){
+            self.it += 1;
+        }
+    }
+}
+
 /// Iterates over vector from ix, returns first non whitespace index
-fn skip_whitespace(doc_u8 : &Vec<u8>, ix: usize) -> usize{
-    let mut it = ix;
+pub fn skip_whitespace(doc_u8 : &Vec<u8>, start: usize) -> usize{
+    let mut it = start;
     while doc_u8[it].is_ascii_whitespace(){
         it += 1;
     }
     return it;
 }
 
-/// Reads all the documents in a directory, including sub-directories
+/// Reads all the documents in a directory, including sub-directories. ONLY FOR TESTING
 pub fn read_pdf_in_dir(filepath : &str) -> Result<(usize,usize),PdfDocError>{
     let mut pdfs_read = 0;
     let mut pdfs_accepted = 0;
@@ -292,11 +296,11 @@ pub fn read_pdf_in_dir(filepath : &str) -> Result<(usize,usize),PdfDocError>{
                         title = value;
                     };
 
-                    if is_accepted_title(&title){
-                        // println!("{}", title);
-                        println!("{}, {}, {}", title, author, new_path);
-                        pdfs_accepted += 1;
-                    }
+                    // if is_accepted_title(&title){
+                    //     // println!("{}", title);
+                    //     println!("{}, {}, {}", title, author, new_path);
+                    //     pdfs_accepted += 1;
+                    // }
                 },
                 Err(e) =>{
                     println!("Error when reading pdf {:?}", e);
@@ -315,30 +319,30 @@ pub fn read_one_pdf(filepath : &str) -> Result<Document,PdfParseError>{
 }
 
 /// Reads and returns startxref-value from end of PDF
-fn read_start_xref(doc : &mut Document) -> Result<usize,PdfParseError>{
+fn read_start_xref(rd : &mut Reader) -> Result<usize,PdfParseError>{
     let mut startxref : usize = 0;
-    doc.it = doc.size() -1;
-    
+    rd.it = rd.size() -1;
+
     // Locate startxref at end of document
     loop {
-        if doc.size()-doc.it > 100 || doc.it == 0{
+        if rd.size()-rd.it > 100 || rd.it == 0{
             return Err(PdfParseError::StartXrefNotFound);
         }
-        if doc.byte() == b's'{
-            if cmp_u8(&doc.doc_u8, doc.it, U_STARTXREF){
-                doc.it+=9;
+        if rd.byte() == b's'{
+            if cmp_u8(&rd.data, rd.it, U_STARTXREF){
+                rd.it+=9;
                 break;
             }
             return Err(PdfParseError::StartXrefNotFound);
         }
-        doc.it -= 1;
+        rd.it -= 1;
     }
-    doc.skip_whitespace();
+    rd.skip_whitespace();
 
     // Parse number
-    while doc.byte().is_ascii_digit() {
-        startxref = startxref*10+(doc.byte() as usize)-48;
-        doc.it += 1;   
+    while rd.byte().is_ascii_digit() {
+        startxref = startxref*10+(rd.byte() as usize)-48;
+        rd.it += 1;   
     }
 
     if startxref == 0{
@@ -348,47 +352,11 @@ fn read_start_xref(doc : &mut Document) -> Result<usize,PdfParseError>{
 }
 
 /// Confirms that file begins with %PDF
-fn parse_pdf_version(doc : &mut Document) -> Result<(),PdfParseError>{
-    if !cmp_u8(&doc.doc_u8, 0, U_PDF){
+fn parse_pdf_version(rd : &mut Reader) -> Result<(),PdfParseError>{
+    if !cmp_u8(&rd.data, 0, U_PDF){
         return Err(PdfParseError::PdfHeaderError);
     }
     Ok(())
-}
-
-/// Determines if a title is a title or not
-fn is_accepted_title(title : &str) -> bool{
-    let mut letters = 0.0;
-    let mut numbers = 0.0;
-    let mut others = 0.0;
-    let mut spaces = 0.0;
-    for t in title.chars(){
-        if t.is_ascii_alphabetic(){
-            letters += 1.0;
-        }
-        else if t.is_ascii_digit() {
-            numbers += 1.0;
-        }
-        else if t == ' '{
-            spaces += 1.0;
-        }
-        else{
-            others += 1.0;
-        }
-    }
-    let total = letters + numbers + others;
-    
-    if total < 10.0 || (total>=10.0 && spaces == 0.0){
-        return false;
-    }
-    
-    let _o_oth = others/total;
-    let o_let = letters/total;
-    if o_let < 0.7{
-        // println!("L={}, N={}, O={}, S={}", letters, numbers, others, spaces);
-        // println!("OOTH={}, OLET={}", o_oth, o_let);
-        return false;
-    }
-    return true;
 }
 
 // Reads the file given in filepath
@@ -404,22 +372,23 @@ fn load_document(filepath : &str) -> Result<Vec<u8>, io::Error>{
 
 /// Parse Xref objects and tables
 fn parse_xref(doc : &mut Document, start : usize, createtrailer : bool) -> Result<(),PdfParseError>{
-    doc.it = start;
+    doc.reader.it = start;
     
-    if doc.size() <= doc.it{
+    if doc.reader.size() <= doc.reader.it{
         return Err(PdfParseError::OutOfBounds);
     }
 
-    if doc.byte().is_ascii_digit(){
+    if doc.reader.byte().is_ascii_digit(){
         // The case were the XREF is an object
         // println!("Xref object");
-        let xref_object = PdfVar::from(doc, doc.it)?;
+        let start = doc.reader.it;
+        let xref_object = PdfVar::from(&mut doc.reader, start)?;
         parse_xref_object(doc, &xref_object)?;
 
         if createtrailer{
             create_trailer(doc, &xref_object);
         }
-    } else if doc.byte() == b'x'{
+    } else if doc.reader.byte() == b'x'{
         // The case were the XREF is only and XREF table, and the trailer is expected after it
         // println!("Xref table");
         parse_xref_table(doc)?;
@@ -433,13 +402,13 @@ fn parse_xref(doc : &mut Document, start : usize, createtrailer : bool) -> Resul
 
 fn parse_table_trailer(doc : &mut Document, createtrailer : bool) -> Result<(),PdfParseError>{
     // Parse trailer. First verify that next is trailer
-    doc.skip_whitespace();
-    if !cmp_u8(&doc.doc_u8, doc.it, U_TRAILER){
+    doc.reader.skip_whitespace();
+    if !cmp_u8(&doc.reader.data, doc.reader.it, U_TRAILER){
         return Err(PdfParseError::TrailerNotFound);
     }
-    doc.it += 7;
+    doc.reader.it += 7;
     let mut stack : Vec<PdfVar> = Vec::new();
-    PdfVar::parse_subobject(doc, &mut stack)?;
+    parse_object(&mut doc.reader, &mut stack)?;
     if stack.len() != 1{
         return Err(PdfParseError::TrailerError);
     }
@@ -462,27 +431,26 @@ fn parse_table_trailer(doc : &mut Document, createtrailer : bool) -> Result<(),P
 
 /// Parses an xref table
 fn parse_xref_table(doc : &mut Document) -> Result<(),PdfParseError>{
-    // println!("Xref table");
-    if !cmp_u8(&doc.doc_u8, doc.it, U_XREF){
+    if !cmp_u8(&doc.reader.data, doc.reader.it, U_XREF){
         return Err(PdfParseError::XrefTableError);
     }
-    doc.it += 4;
-    doc.skip_whitespace();
-    if !doc.byte().is_ascii_digit(){
+    doc.reader.it += 4;
+    doc.reader.skip_whitespace();
+    if !doc.reader.byte().is_ascii_digit(){
         return Err(PdfParseError::XrefTableError);
     }
 
     loop {
-        let Some((index, _size1)) = read_number(doc) else{
+        let Some((index, _size1)) = read_number(&mut doc.reader) else{
             break;
         };
 
         // Skip space
-        while doc.byte() == b' ' {
-            doc.it += 1;
+        while doc.reader.byte() == b' ' {
+            doc.reader.it += 1;
         }
         
-        let Some((length, _size2)) = read_number(doc) else{
+        let Some((length, _size2)) = read_number(&mut doc.reader) else{
             return Err(PdfParseError::NumParseError);
         };
         
@@ -494,8 +462,8 @@ fn parse_xref_table(doc : &mut Document) -> Result<(),PdfParseError>{
 
         // Read the xref-entries
         for i in index..index+length {
-            doc.next_line();
-            let Some((num1, num1_size)) = read_number(doc) else{
+            doc.reader.next_line();
+            let Some((num1, num1_size)) = read_number(&mut doc.reader) else{
                 return Err(PdfParseError::NumParseError);
             };
             if num1_size != 10{
@@ -503,21 +471,21 @@ fn parse_xref_table(doc : &mut Document) -> Result<(),PdfParseError>{
             }
             doc.xref[i] = ObjectRef { compressed: 1, xref : num1, _version:0};
         }
-        doc.next_line();
+        doc.reader.next_line();
     }
     Ok(())
 }
 
 /// Reads a number, returns (number,numbersize)
-fn read_number(doc : &mut Document) -> Option<(usize,usize)>{
-    if !doc.byte().is_ascii_digit(){
+fn read_number(rd : &mut Reader) -> Option<(usize,usize)>{
+    if !rd.byte().is_ascii_digit(){
         return None;
     }
     let mut size = 0;
     let mut num = 0;
-    while doc.byte().is_ascii_digit() {
-        num = num*10 + (doc.byte() - 48) as usize;
-        doc.it += 1;
+    while rd.byte().is_ascii_digit() {
+        num = num*10 + (rd.byte() - 48) as usize;
+        rd.it += 1;
         size += 1;
     }
 
@@ -527,7 +495,7 @@ fn read_number(doc : &mut Document) -> Option<(usize,usize)>{
 /// Parse xref object object
 fn parse_xref_object(doc : &mut Document, xref_object : &PdfVar) -> Result<(),PdfParseError>{
     // Get decoded stream from xref_object
-    let Some(decoded) = xref_object.get_decoded_stream(doc) else{
+    let Some(decoded) = xref_object.get_decoded_stream(&mut doc.reader) else{
         return Err(PdfParseError::EmptyObject);
     };
 
@@ -713,7 +681,7 @@ fn unpack_obj_stm(doc : &mut Document, obj_id : usize){
 
     // println!("Fn = {}, {}", n_value, first);
 
-    let Some(stream_decompr) = stream_obj.get_decoded_stream(doc) else{
+    let Some(stream_decompr) = stream_obj.get_decoded_stream(&mut doc.reader) else{
         println!("Failed to decode object stream");
         return;
     };
@@ -743,7 +711,7 @@ fn unpack_obj_stm(doc : &mut Document, obj_id : usize){
     ix = 1;
     while ix < obj_nums.len(){
         // Declare var
-        let xref_start = doc.doc_u8.len();
+        let xref_start = doc.reader.size();
         let ix_obj_id = obj_nums[ix-1];
         let obj_start = obj_nums[ix]+first;
 
@@ -765,10 +733,10 @@ fn unpack_obj_stm(doc : &mut Document, obj_id : usize){
         
         // Append object to documents byte vector
         let id_bytes : Vec<u8> = ix_obj_id.to_string().bytes().collect();
-        doc.doc_u8.extend(id_bytes);
-        doc.doc_u8.extend(b" 0 obj\n");
-        doc.doc_u8.extend_from_slice(&stream_decompr[obj_start..obj_end]);
-        doc.doc_u8.extend(b"endobj\n\n");
+        doc.reader.data.extend(id_bytes);
+        doc.reader.data.extend(b" 0 obj\n");
+        doc.reader.data.extend_from_slice(&stream_decompr[obj_start..obj_end]);
+        doc.reader.data.extend(b"endobj\n\n");
 
         doc.xref[ix_obj_id] = ObjectRef { compressed: 1, xref : xref_start, _version:0};
         ix += 2;
