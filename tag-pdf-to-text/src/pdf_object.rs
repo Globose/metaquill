@@ -271,9 +271,9 @@ pub fn parse_object(rd : &mut Reader, stack : &mut Vec<PdfVar>) -> Result<(),Pdf
             return obj_parse_stream(rd, stack);
         }
         _ => {
-            println!("uk char {}", rd.byte() as char);
-            print_raw(&rd.data, rd.it, 40);
-            println!("\n----");
+            // println!("uk char {}", rd.byte() as char);
+            // print_raw(&rd.data, rd.it, 40);
+            // println!("\n----");
         }
     }
     Err(PdfParseError::UnmatchedChar)

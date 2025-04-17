@@ -129,6 +129,7 @@ fn parse_text_section(page : &mut Reader, text_objects : &mut Vec<Text>, text : 
     let mut font_size : f64 = 1.0;
     let mut scaled_font_size : f64 = 1.0;
     let mut newline = false;
+    let mut leading : f64 = 0.0;
 
     loop {
         page.skip_whitespace();
@@ -146,24 +147,8 @@ fn parse_text_section(page : &mut Reader, text_objects : &mut Vec<Text>, text : 
                             return;
                         };
 
-                        // Calculate new font size
-                        let new_font_size = font_size_tmp*scale;
-                        if text.scaled_font_size == 0.0 {
-                            text.scaled_font_size = new_font_size;
-                        }
-                        scaled_font_size = new_font_size;
-
-                        // Check if it is a new font
-                        if newline && (new_font_size-text.scaled_font_size).abs() > 0.2 {
-                            // Save previous text segment when new is found
-                            let text_obj = Text{pos_y : text.pos_y, scaled_font_size : text.scaled_font_size, chars : text.chars.clone()};
-                            text_objects.push(text_obj);
-
-                            // Clear prop, set new font settings
-                            text.chars.clear();
-                            text.pos_y = y_pos;
-                            text.scaled_font_size = new_font_size;
-                        }
+                        font_size = font_size_tmp;
+                        scaled_font_size = font_size*scale;
                     }
                     b'J' => {
                         let Some(tj_obj) = stack.get(0) else{
@@ -175,19 +160,11 @@ fn parse_text_section(page : &mut Reader, text_objects : &mut Vec<Text>, text : 
                             return;
                         };
 
-                        if newline {
-                            // println!("Hmm {} {}", scaled_font_size, text.scaled_font_size);
-                            if (scaled_font_size-text.scaled_font_size).abs() > 0.2 {
-                                add_text_section(text, text_objects, y_pos, scaled_font_size);
-                            } else{
-                                text.pos_y = y_pos;
-                            }
-                            newline = false;
-                        }
+                        eval_text_section(text, text_objects, y_pos, scaled_font_size);
 
+                        // Add the text to the text section
                         for pdfvar in tj_array{
                             if let Some(num) = pdfvar.get_f64(){
-                                // println!("Num is {}", num);
                                 if num < -150.0 {
                                     text.chars.push(32);
                                 }
@@ -218,48 +195,75 @@ fn parse_text_section(page : &mut Reader, text_objects : &mut Vec<Text>, text : 
                         let Some(new_scale) = scale_obj.get_f64() else{
                             return;
                         };
+
                         scale = new_scale;
                         y_pos = ty;
+                        scaled_font_size = font_size*scale;
                     }
-                    b'd' => {
+                    b'd' | b'D' | b'*' => {
                         // TODO: space if tx > x
-                        let Some(ty_obj) = stack.get(1) else{
-                            println!("Td fail get 1");
-                            return;
-                        };
-                        let Some(ty) = ty_obj.get_f64() else{
-                            return;
-                        };
+                        let mut ty_value = -leading;
+                        if page.byte() != b'*'{
+                            let Some(ty_obj) = stack.get(1) else{
+                                println!("Td fail get 1");
+                                return;
+                            };
+                            let Some(ty) = ty_obj.get_f64() else{
+                                return;
+                            };
+                            ty_value = ty;
+                        }
+                        if page.byte() == b'D'{
+                            leading = -ty_value;
+                        }
 
                         // Set new value for y-pos, if it is a new BT section position is reset to 0 and then updated
-                        let mut y_new = y_pos + ty * scale;
-
-                        if text.pos_y == -1.0{
-                            text.pos_y = y_new;
-                        }
-                        
-
-                        // Compare the new position to the last one
-                        let diff = (y_new-text.pos_y).abs();
-                        
-                        if diff > text.scaled_font_size*3.0{
-                            add_text_section(text, text_objects, y_new, scaled_font_size);
-                        } else if diff > text.scaled_font_size{
-                            // New Line of text
-                            text.chars.push(32);
-                            newline = true;
-                        } else {
-                            // Same Line of text
-                        }
+                        let mut y_new = y_pos + ty_value * scale;
                         y_pos = y_new;
+                    }
+                    b'L' => {
+                        let Some(l_obj) = stack.get(0) else{
+                            println!("Td fail get L");
+                            return;
+                        };
+                        let Some(lf) = l_obj.get_f64() else{
+                            println!("lobj not f");
+                            return;
+                        };
+                        leading = lf;
+                    }
+                    b'j' => {
+                        let Some(str_obj) = stack.get(0) else{
+                            println!("Faild string Tj");
+                            return;
+                        };
+
+                        eval_text_section(text, text_objects, y_pos, scaled_font_size);
+
+                        // Add text
+                        let PdfVar::StringLiteral(string_lit) = str_obj else{
+                            println!("Failed to conv strobj to strlit");
+                            return;
+                        };
+                        text.chars.extend(string_lit);
+                    }
+                    b'c' | b'w' | b'z' | b'r' | b's' => {
+                        // Ignore
                     }
                     _ => {
                         println!("Unmatched T{}", page.byte() as char);
+                        println!("Stack {:?}", stack);
                     }
                 }
                 page.it +=1;
                 
                 stack.clear();
+            }
+            b'\'' => {
+                println!("Single - quote ");
+            }
+            b'"' => {
+                println!("Double quote");
             }
             b'E' => {
                 if cmp_u8(&page.data, page.it, b"ET"){
@@ -293,7 +297,29 @@ fn parse_text_section(page : &mut Reader, text_objects : &mut Vec<Text>, text : 
     // println!("Stackc {:?}", stack);
 }
 
-fn add_text_section(text : &mut Text, text_objects : &mut Vec<Text>, y_new : f64, scaled_font_size : f64){
+/// Evaluates if a new text segment belongs to the current text section, creates a new text section otherwise
+fn eval_text_section(text : &mut Text, text_objects : &mut Vec<Text>, y_pos : f64, scaled_font_size : f64){
+    // Compare y-position of last text to the new one
+
+    // println!("Eval {:?}, {}", text, y_pos);
+    let diff = (text.pos_y-y_pos).abs();
+    if diff > 3.0*text.scaled_font_size {
+        // New Text section
+        add_text_section(text, text_objects, y_pos, scaled_font_size);
+    } else if diff > 1.0*text.scaled_font_size {
+        // New row, look if fontsize has changed
+        if (text.scaled_font_size-scaled_font_size).abs() > 0.2{
+            add_text_section(text, text_objects, y_pos, scaled_font_size);
+        }
+        else{
+            // Update the y-value of the text segment
+            text.chars.push(32);
+            text.pos_y = y_pos;
+        }
+    }
+}
+
+fn add_text_section(text : &mut Text, text_objects : &mut Vec<Text>, y_pos : f64, scaled_font_size : f64){
     // New text section
     if text.chars.len() > 0{
         // Save previous text segment when new is found
@@ -301,7 +327,7 @@ fn add_text_section(text : &mut Text, text_objects : &mut Vec<Text>, y_new : f64
         text_objects.push(text_obj);
         text.chars.clear();
     }
-    text.pos_y = y_new;
+    text.pos_y = y_pos;
     text.scaled_font_size = scaled_font_size;
 }
 

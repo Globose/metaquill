@@ -19,7 +19,7 @@ use encoding::PDFDOC_MAP;
 fn main() {
     // let filepath = "/mnt/c/data/vault/projekt/tag-pdf-to-text/r1.pdf";
     // let filepath = r"C:\data\vault\projekt\pdfparse\uw1.pdf";
-    let filepath = r"C:\data\vault\projekt\pdf-to-metadata\pdfs\s2.pdf";
+    let filepath = r"C:\data\vault\projekt\pdf-to-metadata\pdfs\el5.pdf";
     
     match read_one_pdf(filepath) {
         Ok(mut x) =>{
@@ -29,10 +29,10 @@ fn main() {
             // if let Ok(x) = x.get_info("Creator"){
             //     println!("Tilte {}", x);
             // }
-            // match x.get_info("Title"){
-            //     Ok(x) => println!("Info-record {}", x),
-            //     Err(e) => println!("Ierr {:?}", e),
-            // }
+            match x.get_info("Title"){
+                Ok(x) => println!("Info-record: {}", x),
+                Err(e) => println!("Ierr {:?}", e),
+            }
         }
         Err(e) =>{
             println!("Error {:?}", e);
