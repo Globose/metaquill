@@ -1,6 +1,6 @@
 use std::{fs::{self, read_dir}, io, string::ParseError};
 
-use crate::{decoding::{decode_flate, decode_pdfdoc, decode_pdfdoc_u8, get_256_repr, png_decode}, pdf_object::{cmp_u8, parse_object, PdfParseError, PdfVar}, print_raw, text_parser::{get_page_resources, read_page_content}};
+use crate::{decoding::{decode_flate, decode_pdfdoc, decode_pdfdoc_u8, get_256_repr, png_decode}, pdf_object::{cmp_u8, parse_object, PdfParseError, PdfVar}, print_raw, text_parser::{get_page_resources, read_objects_text, Text}};
 
 #[derive(Debug)]
 struct Trailer{
@@ -67,8 +67,8 @@ const C_INDEX : &str = "Index";
 const C_ENCRYPT : &str = "Encrypt";
 
 impl Document {
-    /// Read Text From Page
-    pub fn get_text_from_page(&mut self, page_nr : usize) -> Option<String>{
+    /// Read Text Sections From Page
+    pub fn get_text_from_page(&mut self, page_nr : usize) -> Option<Vec<Text>>{
         let Some(page_object) = self.get_page_no(page_nr) else{
             return None;
         };
@@ -86,9 +86,7 @@ impl Document {
             println!("Failed to get usize array contents");
             return None;
         };
-
-        read_page_content(self, content_ids);
-        return None;
+        read_objects_text(self, content_ids)
     }
 
     /// Returns a page

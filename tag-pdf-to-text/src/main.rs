@@ -13,18 +13,25 @@ mod text_parser;
 
 use std::char::from_u32;
 
+use decoding::decode_pdfdoc;
 use document::{read_one_pdf, read_pdf_in_dir};
 use encoding::PDFDOC_MAP;
 
 fn main() {
     // let filepath = "/mnt/c/data/vault/projekt/tag-pdf-to-text/r1.pdf";
     // let filepath = r"C:\data\vault\projekt\pdfparse\uw1.pdf";
-    let filepath = r"C:\data\vault\projekt\pdf-to-metadata\pdfs\el5.pdf";
+    let filepath = r"C:\data\vault\projekt\pdf-to-metadata\pdfs\A1.pdf";
     
     match read_one_pdf(filepath) {
         Ok(mut x) =>{
-            if let Some(page) = x.get_text_from_page(0){
-                println!("Page {:?}", page);
+            if let Some(text_objects) = x.get_text_from_page(0){
+                println!("Textobjects {}", text_objects.len());
+                for text_obj in text_objects{
+                    println!("---");
+                    println!("Pos Y: {}", text_obj.pos_y);
+                    println!("Font size: {}", text_obj.scaled_font_size);
+                    println!("Text: {}", decode_pdfdoc(&text_obj.chars));
+                }
             };
             // if let Ok(x) = x.get_info("Creator"){
             //     println!("Tilte {}", x);

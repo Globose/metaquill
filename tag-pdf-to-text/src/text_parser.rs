@@ -9,9 +9,9 @@ pub struct TextReader {
 
 #[derive(Debug, Clone)]
 pub struct Text{
-    pos_y : f64,
-    scaled_font_size : f64,
-    chars : Vec<u32>,
+    pub pos_y : f64,
+    pub scaled_font_size : f64,
+    pub chars : Vec<u32>,
 }
 
 pub fn get_page_resources(doc : &mut Document, page_obj : &PdfVar){
@@ -67,17 +67,17 @@ pub fn get_page_resources(doc : &mut Document, page_obj : &PdfVar){
     }
 }
 
-pub fn read_page_content(doc : &mut Document, obj_ids : Vec<usize>){
-    println!("Reading ids {:?}", obj_ids);
+/// Returns a vector of text based on a list of content objects
+pub fn read_objects_text(doc : &mut Document, obj_ids : Vec<usize>) -> Option<Vec<Text>>{
     let mut page_u8 : Vec<u8> = Vec::new();
 
     // Iterate over all content objects for the page, store eveything in One Vector
     for obj_id in obj_ids{
         let Ok(obj) = doc.get_object_by_id(obj_id) else{
-            return;
+            return None;
         };
         let Some(decoded) = obj.get_decoded_stream(&mut doc.reader) else {
-            return;
+            return None;
         };
         page_u8.extend(decoded);
     }
@@ -111,14 +111,8 @@ pub fn read_page_content(doc : &mut Document, obj_ids : Vec<usize>){
         parse_text_section(&mut page, &mut text_objects, &mut text);
     }
     
-    println!("Textobjects {}", text_objects.len());
-    for text_obj in text_objects{
-        println!("---");
-        println!("Pos Y: {}", text_obj.pos_y);
-        println!("Font size: {}", text_obj.scaled_font_size);
-        println!("Text: {}", decode_pdfdoc(&text_obj.chars));
-        println!("---");
-    }
+    add_text_section(&mut text, &mut text_objects, 0.0, 0.0);
+    Some(text_objects)
 }
 
 /// Parses a BT section reading all text elements
