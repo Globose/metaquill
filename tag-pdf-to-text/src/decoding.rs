@@ -1,8 +1,21 @@
-use std::io::Read;
+use std::io::{BufRead, BufReader, Cursor, Read};
 
-use crate::{document::{Document, Reader}, pdf_object::PdfVar, PDFDOC_MAP};
+use crate::{document::{Document}, pdf_object::PdfVar, PDFDOC_MAP};
 use flate2::read::ZlibDecoder;
+use lzw::{Decoder, DecoderEarlyChange, LsbReader};
 
+pub fn decode_pdfdoc_char(byte : u32) -> String{
+    if !(32..254).contains(&byte){
+        return String::new();
+    }
+    let Some(chr) = PDFDOC_MAP.get(byte as usize) else{
+        return String::new();
+    };
+    if *chr != '\0'{
+        return chr.to_string();
+    }
+    return String::new();
+}
 
 /// Decodes the PDFDOC text encoding
 pub fn decode_pdfdoc(bytes : &Vec<u32>) -> String{
@@ -25,6 +38,9 @@ pub fn decode_pdfdoc(bytes : &Vec<u32>) -> String{
 pub fn decode_pdfdoc_u8(bytes : &Vec<u8>) -> String{
     let mut decoded = String::new();
     for byte in bytes{
+        if *byte == 13 || *byte == 10{
+            decoded.push('\n');
+        }
         if !(32..254).contains(byte){
             continue;
         }
@@ -79,9 +95,9 @@ pub fn png_decode(stream: &Vec<u8>, _predictor: usize, columns: usize) -> Option
 }
 
 /// Decode flate stream
-pub fn decode_flate(rd : &mut Reader, start : usize, size : usize) -> Option<Vec<u8>>{
-    rd.it = start;
-    let compressed_data = &rd.data[rd.it..rd.it + size];
+pub fn decode_flate(doc : &mut Document, start : usize, size : usize) -> Option<Vec<u8>>{
+    doc.it = start;
+    let compressed_data = &doc.data[doc.it..doc.it + size];
     
     let mut decoder = ZlibDecoder::new(compressed_data);
     let mut output = Vec::new();
@@ -97,20 +113,20 @@ pub fn decode_flate(rd : &mut Reader, start : usize, size : usize) -> Option<Vec
 }
 
 /// Processes a decoded stream based on the decodeparms
-pub fn handle_decodeparms(stream : Vec<u8>, decodeparms_obj : &PdfVar) -> Option<Vec<u8>>{
+pub fn handle_decodeparms(stream : Vec<u8>, decodeparms_obj : &PdfVar, doc : &mut Document) -> Option<Vec<u8>>{
     let mut predictor : usize = 1;
     let mut columns : usize = 1;
 
     // Fetch Predictor value
     if let Some(pred_obj) = decodeparms_obj.get_dict_value("Predictor"){
-        if let Some(pred_usize) = pred_obj.get_usize() {
+        if let Some(pred_usize) = pred_obj.get_usize(doc) {
             predictor = pred_usize;
         };
     };
     
     // Fetch Columns value
     if let Some(columns_obj) = decodeparms_obj.get_dict_value("Columns"){
-        if let Some(columns_usize) = columns_obj.get_usize() {
+        if let Some(columns_usize) = columns_obj.get_usize(doc) {
             columns = columns_usize;
         };
     };
@@ -135,4 +151,11 @@ pub fn get_256_repr(bytes : &[u8]) -> usize{
         output = output * 256 + (byte as usize);
     }
     return output;
+}
+
+/// Decodes a LZW stream
+pub fn decode_lzw(doc : &mut Document, start : usize, size : usize, obj_dict : &PdfVar) -> Option<Vec<u8>> {
+    println!("DECODE LZW");
+
+    return None;
 }
