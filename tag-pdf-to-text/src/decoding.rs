@@ -1,9 +1,9 @@
-use std::io::{BufRead, BufReader, Cursor, Read};
+use std::io::Read;
 
-use crate::{document::{Document}, pdf_object::PdfVar, PDFDOC_MAP};
+use crate::{document::{Document, PdfError}, pdf_object::PdfVar, PDFDOC_MAP};
 use flate2::read::ZlibDecoder;
-use lzw::{Decoder, DecoderEarlyChange, LsbReader};
 
+/// Decodes a u32 char to a String
 pub fn decode_pdfdoc_char(byte : u32) -> String{
     if !(32..254).contains(&byte){
         return String::new();
@@ -34,28 +34,8 @@ pub fn decode_pdfdoc(bytes : &Vec<u32>) -> String{
     return decoded;
 }
 
-/// Decodes the PDFDOC text encoding
-pub fn decode_pdfdoc_u8(bytes : &Vec<u8>) -> String{
-    let mut decoded = String::new();
-    for byte in bytes{
-        if *byte == 13 || *byte == 10{
-            decoded.push('\n');
-        }
-        if !(32..254).contains(byte){
-            continue;
-        }
-        let Some(chr) = PDFDOC_MAP.get(*byte as usize) else{
-            continue;
-        };
-        if *chr != '\0'{
-            decoded.push(*chr);
-        }
-    }
-    return decoded;
-}
-
 /// PNG-decoding, returns decoded stream
-pub fn png_decode(stream: &Vec<u8>, _predictor: usize, columns: usize) -> Option<Vec<u8>>{
+pub fn png_decode(stream: &Vec<u8>, _predictor: usize, columns: usize) -> Result<Vec<u8>, PdfError>{
     let mut i : usize = 0;
     let mut decoded : Vec<u8> = Vec::new();
 
@@ -83,37 +63,35 @@ pub fn png_decode(stream: &Vec<u8>, _predictor: usize, columns: usize) -> Option
                 }
             }
             _ => {
-                println!("Unsupported filter type: {}", filter_type);
-                return None;
+                // Unsupported filter type
+                return Err(PdfError::DecodeError);
             }
         }
 
         i += columns;
     }
 
-    return Some(decoded);
+    return Ok(decoded);
 }
 
-/// Decode flate stream
-pub fn decode_flate(doc : &mut Document, start : usize, size : usize) -> Option<Vec<u8>>{
-    doc.it = start;
-    let compressed_data = &doc.data[doc.it..doc.it + size];
-    
-    let mut decoder = ZlibDecoder::new(compressed_data);
-    let mut output = Vec::new();
+/// Decode flate stream in place (functionally)
+pub fn decode_flate(data : &mut Vec<u8>) -> Result<(), PdfError>{
+    let data_copy = data.clone();
+    data.clear();
+    let mut decoder = ZlibDecoder::new(data_copy.as_slice());
     
     // Attempt to decode flate
-    match decoder.read_to_end(&mut output){
-        Ok(_) => Some(output),
+    match decoder.read_to_end(data){
+        Ok(_) => Ok(()),
         Err(e) => {
             println!("Failed to decompress zlib: {}", e);
-            None
+            Err(PdfError::DecodeError)
         }
     }
 }
 
 /// Processes a decoded stream based on the decodeparms
-pub fn handle_decodeparms(stream : Vec<u8>, decodeparms_obj : &PdfVar, doc : &mut Document) -> Option<Vec<u8>>{
+pub fn handle_decodeparms(stream : Vec<u8>, decodeparms_obj : &PdfVar, doc : &mut Document) -> Result<Vec<u8>, PdfError>{
     let mut predictor : usize = 1;
     let mut columns : usize = 1;
 
@@ -133,14 +111,10 @@ pub fn handle_decodeparms(stream : Vec<u8>, decodeparms_obj : &PdfVar, doc : &mu
 
     // Handle PNG-decoding
     if (10..16).contains(&predictor){
-        return match png_decode(&stream, predictor, columns){
-            Some(x) => Some(x),
-            None => None,
-        };
+        return png_decode(&stream, predictor, columns);
     }
 
-    println!("Unknown Predictor Value {}", predictor);
-    return None;
+    return Err(PdfError::DecodeError);
 }
 
 
@@ -151,11 +125,4 @@ pub fn get_256_repr(bytes : &[u8]) -> usize{
         output = output * 256 + (byte as usize);
     }
     return output;
-}
-
-/// Decodes a LZW stream
-pub fn decode_lzw(doc : &mut Document, start : usize, size : usize, obj_dict : &PdfVar) -> Option<Vec<u8>> {
-    println!("DECODE LZW");
-
-    return None;
 }

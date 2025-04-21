@@ -93,9 +93,10 @@ pub fn read_pdf(filepath: &str){
     let Some(mut pdf) = read_pdf_metadata(filepath) else {
         return;
     };
-    println!("AssumedTitle = {}", pdf.assumed_title);
-    evaluate_metadata(&mut pdf);
-    println!("2: MetaTitle = {}, AssumedTitle = {}", pdf.metadata_title, pdf.assumed_title);
+    println!("Meta = {}", pdf.metadata_title);
+    // println!("AssumedTitle = {}", pdf.assumed_title);
+    // evaluate_metadata(&mut pdf);
+    // println!("2: MetaTitle = {}, AssumedTitle = {}", pdf.metadata_title, pdf.assumed_title);
 
     // validate_metadata(pdf);
     // println!("Pdf metadata {:?}", pdf);

@@ -1,6 +1,5 @@
-use std::{collections::HashMap, hash::Hash, thread::panicking};
-
-use crate::{decoding::{decode_pdfdoc, decode_pdfdoc_char, decode_pdfdoc_u8}, document::{skip_whitespace, Document}, encoding::PDFDOC_MAP, pdf_object::{cmp_u8, is_delimiter, parse_object, to_hex, PdfParseError, PdfVar}, print_raw};
+use std::collections::HashMap;
+use crate::{decoding::decode_pdfdoc_char, document::{Document, PdfError}, pdf_object::{cmp_u8, is_delimiter, parse_object, to_hex, PdfVar}};
 
 #[derive(Debug, Clone)]
 pub struct Text{
@@ -16,95 +15,106 @@ pub struct Font{
     mapping : HashMap<u32,Vec<u32>>,
 }
 
+#[derive(Debug)]
+pub struct GraphState {
+    // TODO: 
+}
+
+#[derive(Debug)]
+pub struct TextReader {
+    stack : Vec<PdfVar>,
+    y_pos : f64,
+    scale : f64,
+    font_size : f64,
+    scaled_font_size : f64,
+    leading : f64,
+}
+
 /// Reads the unicode Char Mappings for the fonts on the page
+/// The first font in the result vector is always an empty font
 pub fn get_page_resources(doc : &mut Document, page_obj : &PdfVar) -> Vec<Font>{
-    // TODO: handle case where Resources is an indirect object?? Maybe in the method get_dict_value??
     let mut fonts : Vec<Font> = Vec::new();
     fonts.push(Font{name : String::new(), mapping : HashMap::new()});
-    
-    let Some(mut resource_dict_obj) = page_obj.get_dict_value("Resources") else{
-        println!("Failed to find resource dictionary");
+
+    // Find resources dictionary
+    let Some(resource_dict_obj) = page_obj.get_dict_value("Resources") else{
         return fonts;
     };
     
     // Retrieve Resources object from ID
     let font_dict_obj = match resource_dict_obj {
         PdfVar::IndirectObject(obj_id) => {
-            let Ok(resource_dict) = doc.get_object_by_id(*obj_id) else{
-                println!("Failed to get obj with id {}", obj_id);
+            let Some(resource_dict) = doc.get_object_by_id(*obj_id) else{
                 return fonts;
             };
             resource_dict
         }
         PdfVar::Dictionary(_) => resource_dict_obj.clone(),
         _ => {
-            println!("Resources dict has to be of type Dictionary or Indirect Object");
             return fonts;
         }
     };
 
     // Read Object Member Font-object
     let Some(font_dict) = font_dict_obj.get_dict_value("Font") else{
-        println!("Failed to find font");
         return fonts;
     };
 
     let all_fonts = match font_dict {
-        PdfVar::Dictionary(x) => x.clone(),
+        PdfVar::Dictionary(x) => {
+            x.clone()
+        }
         PdfVar::IndirectObject(x) => {
-            let Ok(unpacked_indirect_obj) = doc.get_object_by_id(*x) else {
+            // Fetch the indirect object
+            let Some(unpacked_indirect_obj) = doc.get_object_by_id(*x) else {
                 return fonts;
             };
-            let PdfVar::Dictionary(font_dict) = unpacked_indirect_obj else {
+            let PdfVar::Object { _id, content } = unpacked_indirect_obj else {
                 return fonts;
             };
-            font_dict
+            
+            // Get the dictionary
+            let Some(content_1) = content.get(1) else {
+                return fonts;
+            };
+
+            let PdfVar::Dictionary(dict) = content_1 else {
+                return fonts;
+            };
+            dict.clone()
         }
         _ => {
-            println!("Unknown font dict");
             return fonts;
         }
     };
 
-    // Read the Font Object as a dictionary
-    let PdfVar::Dictionary(font_dictionary) = font_dict else{
-        println!("Font dictionary not dict");
-        return fonts;
-    };
-
     // Read all fonts
-    for (fkey, pdfvar) in font_dictionary{
+    for (fkey, pdfvar) in all_fonts{
         // Get Object ID for the given font
-        let Some(obj_id) = pdfvar.get_indirect_obj_index(doc) else {
-            println!("Failed to get font {}", fkey);
+        let Some(obj_id) = pdfvar.get_indirect_obj_index() else {
             continue;
         };
         
         // Retrieve the object with the ID
-        let Ok(font_obj) = doc.get_object_by_id(obj_id) else {
-            println!("Failed to find object {}", obj_id);
+        let Some(font_obj) = doc.get_object_by_id(obj_id) else {
             continue;
         };
 
         // Retrieve a ToUnicode
-        let Some(to_unicode_id) = font_obj.get_dict_int("ToUnicode", doc) else{
-            // println!("Font {} contains no ToUnicode", fkey);
+        let Some(to_unicode_id) = font_obj.get_dict_int("ToUnicode") else{
             continue;
         };
 
         // Fetch ToUnicode Object
-        let Ok(to_unicode_obj) = doc.get_object_by_id(to_unicode_id) else{
-            println!("Failed to fetch ToUnicode object");
-            continue;;
+        let Some(to_unicode_obj) = doc.get_object_by_id(to_unicode_id) else{
+            continue;
         };
-        // println!("ToUnicodeObject {:?}", to_unicode_obj);
+
         let Some(to_unicode_content) = to_unicode_obj.get_decoded_stream(doc) else{
-            println!("Failed to Unpack ToUnicode");
-            continue;;
+            continue;
         };
         
         let mut codex : HashMap<u32, Vec<u32>> = HashMap::new(); 
-        // let mut char_reader = Reader{data : to_unicode_content, it : 0};
         
         // Add decoded to document
         doc.it = doc.size();
@@ -129,6 +139,7 @@ pub fn get_page_resources(doc : &mut Document, page_obj : &PdfVar) -> Vec<Font>{
             }
             doc.it += 1;
         }
+
         fonts.push(Font{name : fkey.to_string(), mapping : codex});
     }
     fonts
@@ -136,7 +147,6 @@ pub fn get_page_resources(doc : &mut Document, page_obj : &PdfVar) -> Vec<Font>{
 
 /// Reads key-value pairs from beginbfrange-section in ToUnicode, and adds them to the translation map
 fn read_frange(doc : &mut Document, codex : &mut HashMap<u32, Vec<u32>>) -> Option<()>{
-    // print_raw(&rd.data, rd.it, rd.size());
     loop {
         // Go to next
         let mut char_range: [u32; 2] = [0,0];
@@ -156,12 +166,10 @@ fn read_frange(doc : &mut Document, codex : &mut HashMap<u32, Vec<u32>>) -> Opti
 
             // Get range param
             let Ok(value) = to_hex(&hex_str) else {
-                println!("Error: Range");
                 return None;
             };
 
             if doc.byte() != b'>' {
-                println!("No > at end");
                 return None;
             }
             char_range[i] = value;
@@ -169,7 +177,7 @@ fn read_frange(doc : &mut Document, codex : &mut HashMap<u32, Vec<u32>>) -> Opti
         }
 
         doc.skip_whitespace();
-        // println!("Range {:?}", char_range);
+
         let mut ix = char_range[0];
         // Read mapping
         if doc.byte() == b'['{
@@ -181,7 +189,6 @@ fn read_frange(doc : &mut Document, codex : &mut HashMap<u32, Vec<u32>>) -> Opti
                     break;
                 }
                 let Some(v) = read_hex_chars(doc) else {
-                    println!("Error Array mapping");
                     return None;
                 };
                 codex.insert(ix, v);
@@ -192,12 +199,10 @@ fn read_frange(doc : &mut Document, codex : &mut HashMap<u32, Vec<u32>>) -> Opti
             doc.it += 1;
             doc.skip_whitespace();
             let Ok(value) = to_hex(&doc.data[doc.it..doc.it+4]) else {
-                println!("Range number mapping error");
                 return None;
             };
             doc.it += 4;
             if doc.byte() != b'>' {
-                println!("End Range mapping error >");
                 return None;
             }
             doc.it += 1;
@@ -207,7 +212,6 @@ fn read_frange(doc : &mut Document, codex : &mut HashMap<u32, Vec<u32>>) -> Opti
             }
 
         } else {
-            println!("Failed to find mapping {}", doc.byte() as char);
             return None;
         }
     }
@@ -215,7 +219,6 @@ fn read_frange(doc : &mut Document, codex : &mut HashMap<u32, Vec<u32>>) -> Opti
 
 /// Reads key-value pairs from beginbfchar-section in ToUnicode, and adds them to the translation map
 fn read_fchar(doc : &mut Document, codex : &mut HashMap<u32, Vec<u32>>) -> Option<()>{
-    // print_raw(&rd.data, rd.it, rd.data.len());
     loop {
         doc.skip_whitespace();
         if doc.byte() != b'<' {
@@ -232,25 +235,19 @@ fn read_fchar(doc : &mut Document, codex : &mut HashMap<u32, Vec<u32>>) -> Optio
 
         // Get the key value
         let Ok(key) = to_hex(&hex_str) else {
-            println!("No Key");
             return None;
         };
         
         if doc.byte() != b'>' {
-            println!("No >");
             return None; 
         }
         doc.it += 1;
         
         // Get All values for the key
-        // println!("Preval {}", rd.it);
         if let Some(values) = read_hex_chars(doc){
-            // println!("Val {:?}", values);
             codex.insert(key, values);
         }
-        // println!("post {}", rd.it);
     }
-    return Some(());
 }
 
 /// Reads a hex-string <4*k>, returns u32 vector
@@ -264,11 +261,11 @@ fn read_hex_chars(doc : &mut Document) -> Option<Vec<u32>>{
     let mut chars : Vec<u32> = Vec::new();
     loop {
         let Ok(num) = to_hex(&doc.data[doc.it..doc.it+4]) else {
-            println!("Failed to get hex repr");
             return None;
         };
         chars.push(num);
         doc.it += 4;
+        doc.skip_whitespace();
         if doc.byte() == b'>'{
             break;
         }
@@ -279,23 +276,49 @@ fn read_hex_chars(doc : &mut Document) -> Option<Vec<u32>>{
 
 /// Returns a vector of text based on a list of content objects
 pub fn read_objects_text(doc : &mut Document, obj_ids : Vec<usize>, fonts : &Vec<Font>) -> Option<Vec<Text>>{
-    let mut page_u8 : Vec<u8> = Vec::new();
     // Iterate over all content objects for the page, store eveything in One Vector
     let start = doc.size();
+
     for obj_id in obj_ids{
-        let Ok(obj) = doc.get_object_by_id(obj_id) else{
+        let Some(obj) = doc.get_object_by_id(obj_id) else{
             return None;
         };
+
+        // Content can be either an array or a dictionary
+        let PdfVar::Object{_id, content} = &obj else {
+            return None;
+        };
+
+        let Some(obj_1) = content.get(1) else {
+            return None;
+        };
+
+        if let Some(array) = obj_1.get_usize_array() {
+            for index in array{
+                let Some(objx) = doc.get_object_by_id(index) else {
+                    return None;
+                };
+                let Some(decoded) = objx.get_decoded_stream(doc) else {
+                    return None;
+                };
+                doc.data.extend(decoded);
+            }
+            continue;
+        }
+
         let Some(decoded) = obj.get_decoded_stream(doc) else {
             continue;
-            // return None;
         };
         doc.data.extend(decoded);
     }
 
     doc.it = start;
+
     let mut text_objects : Vec<Text> = Vec::new();
     let mut text: Text = Text{pos_y : -1.0, chars : String::new(), scaled_font_size : 0.0, font : String::new()};
+    let mut text_reader = TextReader{
+        stack : Vec::new(), y_pos : 0.0, scale : 1.0, font_size : 1.0, scaled_font_size : 1.0, leading : 0.0
+    };
 
     while doc.it < doc.size() {
         // Find BT section
@@ -316,7 +339,7 @@ pub fn read_objects_text(doc : &mut Document, obj_ids : Vec<usize>, fonts : &Vec
         if doc.it >= doc.size(){
             break;
         }
-        parse_text_section(doc, &mut text_objects, &mut text, &fonts);
+        parse_text_section(doc, &mut text_objects, &mut text, &fonts, &mut text_reader)?;
     }
     
     add_text_section(&mut text, &mut text_objects, 0.0, 0.0);
@@ -324,15 +347,9 @@ pub fn read_objects_text(doc : &mut Document, obj_ids : Vec<usize>, fonts : &Vec
 }
 
 /// Parses a BT section reading all text elements
-fn parse_text_section(doc : &mut Document, text_objects : &mut Vec<Text>, text : &mut Text, fonts : &Vec<Font>){
-    let mut stack : Vec<PdfVar> = Vec::new();
-    let mut y_pos : f64 = 0.0;
-    let mut scale : f64 = 1.0;
-    let mut font_size : f64 = 1.0;
-    let mut scaled_font_size : f64 = text.scaled_font_size;
-    let mut newline = false;
-    let mut leading : f64 = 0.0;
-
+fn parse_text_section(doc : &mut Document, text_objects : &mut Vec<Text>, text : &mut Text, fonts : &Vec<Font>, tr : &mut TextReader) -> Option<()>{    
+    tr.scale = 1.0;
+    tr.scaled_font_size = tr.font_size;
     loop {
         doc.skip_whitespace();
         match doc.byte() {
@@ -340,164 +357,50 @@ fn parse_text_section(doc : &mut Document, text_objects : &mut Vec<Text>, text :
                 doc.it += 1;
                 match doc.byte() {
                     b'f' => {
-                        let Some(font_name_obj) = stack.get(0) else{
-                            println!("Stack wrong tf 0");
-                            return;
-                        };
-                        let Some(font_name) = font_name_obj.get_name() else{
-                            println!("Failed to get font name");
-                            return;
-                        };
-                        let Some(font_size_obj) = stack.get(1) else {
-                            println!("Stack wrong Tf");
-                            return;
-                        };
-                        let Some(font_size_tmp) = font_size_obj.get_f64() else{
-                            println!("Font size not num");
-                            return;
-                        };
-
-                        text.font = font_name;
-                        font_size = font_size_tmp;
-                        scaled_font_size = font_size*scale;
+                        text_tf(tr,text)?;
                     }
                     b'J' => {
-                        let Some(tj_obj) = stack.get(0) else{
-                            println!("Stakc empty TJ");
-                            return;
-                        };
-                        let PdfVar::Array(tj_array) = tj_obj else{
-                            println!("TJ obj is not array");
-                            return;
-                        };
-
-                        eval_text_section(text, text_objects, y_pos, scaled_font_size);
-
-                        // Add the text to the text section
-                        for pdfvar in tj_array{
-                            if let Some(num) = pdfvar.get_f64(){
-                                if num < -165.0 {
-                                    text.chars.push(' ');
-                                }
-                                continue;
-                            }
-                            if let PdfVar::StringLiteral(string_lit) = pdfvar {
-                                // text.chars.extend(string_lit);
-                                add_str_lit(text, string_lit, fonts);
-                                continue;
-                            }
-                            println!("Other {:?}", pdfvar);
-                        }
-
+                        text_tj_array(tr, text, text_objects, fonts)?;
                     }
                     b'm' => {
-                        let Some(ty_obj) = stack.get(5) else{
-                            println!("Tm stack faile");
-                            return;
-                        };
-                        let Some(scale_obj) = stack.get(0) else{
-                            return;
-                        };
-
-                        // Get values
-                        let Some(ty) = ty_obj.get_f64() else{
-                            return;
-                        };
-                        let Some(new_scale) = scale_obj.get_f64() else{
-                            return;
-                        };
-
-                        scale = new_scale;
-                        y_pos = ty;
-                        scaled_font_size = font_size*scale;
+                        text_tm(tr)?;
                     }
-                    b'd' | b'D' | b'*' => {
-                        // TODO: space if tx > x
-
-                        // Sets value to -leading at the start
-                        // If Td or TD, the value should be replaced with an arg
-                        let mut ty_value = -leading;
-                        let mut tx : f64 = 0.0;
-                        if doc.byte() != b'*'{
-                            let Some(ty_obj) = stack.get(1) else{
-                                println!("Td fail get 1");
-                                return;
-                            };
-                            let Some(ty) = ty_obj.get_f64() else{
-                                return;
-                            };
-
-                            // Fetch x-move-value
-                            let Some(tx_obj) = stack.get(0) else {
-                                return;
-                            };
-                            if let Some(tx_temp) = tx_obj.get_f64(){
-                                tx = tx_temp;
-                            };
-                            ty_value = ty;
-                        }
-
-                        // For TD, modify leading value
-                        if doc.byte() == b'D'{
-                            leading = -ty_value;
-                        }
-
-                        // If x-move is large, we have a space
-                        if tx > 150.0{
-                            // println!("GAP");
-                            text.chars.push(' ');
-                        }
-
-                        // Set new value for y-pos, if it is a new BT section position is reset to 0 and then updated
-                        let mut y_new = y_pos + ty_value * scale;
-                        y_pos = y_new;
+                    b'd' => {
+                        text_td(tr, text)?;
+                    }
+                    b'D' => {
+                        text_tl(tr, true)?;
+                        text_td(tr, text)?;
+                    }
+                    b'*' => {
+                        text_asterisk(tr)?;
                     }
                     b'L' => {
-                        let Some(l_obj) = stack.get(0) else{
-                            println!("Td fail get L");
-                            return;
-                        };
-                        let Some(lf) = l_obj.get_f64() else{
-                            println!("lobj not f");
-                            return;
-                        };
-                        leading = lf;
+                        text_tl(tr, false)?;
                     }
                     b'j' => {
-                        let Some(str_obj) = stack.get(0) else{
-                            println!("Faild string Tj");
-                            return;
-                        };
-                        
-                        eval_text_section(text, text_objects, y_pos, scaled_font_size);
-
-                        // Add text
-                        let PdfVar::StringLiteral(string_lit) = str_obj else{
-                            println!("Failed to conv strobj to strlit");
-                            return;
-                        };
-                        add_str_lit(text, string_lit, fonts);
-                        // text.chars.extend(string_lit);
+                        text_tj(tr, text, text_objects, fonts)?;
                     }
                     b'c' | b'w' | b'z' | b'r' | b's' => {
                         // Ignore
                     }
                     _ => {
-                        println!("Unmatched T{}", doc.byte() as char);
-                        println!("Stack {:?}", stack);
+                        // Unmatched T
                     }
                 }
                 doc.it +=1;
                 
-                stack.clear();
+                tr.stack.clear();
             }
             b'\'' => {
-                println!("Single - quote ");
-                return;
+                text_asterisk(tr);
+                text_tj(tr, text, text_objects, fonts)?;
+                tr.stack.clear();
+                doc.it += 1;
             }
             b'"' => {
-                println!("Double quote");
-                return;
+                // Not handled yet
+                return None;
             }
             b'E' => {
                 if cmp_u8(&doc.data, doc.it, b"ET"){
@@ -505,27 +408,165 @@ fn parse_text_section(doc : &mut Document, text_objects : &mut Vec<Text>, text :
                     break;
                 }
                 else{
-                    let uktype = read_text(doc);
-                    stack.clear();
+                    read_text(doc);
+                    tr.stack.clear();
                 }
             }
             _ => {
-                if let Err(e) = parse_object(doc, &mut stack){
+                if let Err(e) = parse_object(doc, &mut tr.stack){
                     match e {
-                        PdfParseError::UnmatchedChar => {
-                            let uktype = read_text(doc);
-                            // println!("uktype {}", uktype);
-                            stack.clear();
+                        PdfError::UnmatchedChar => {
+                            read_text(doc);
+                            tr.stack.clear();
+                            doc.it += 1;
                         }
                         _ => {
-                            println!("Error other {:?}", e);
-                            return;
+                            return None;
                         }
                     }
                 }
             }
         }
     }
+    Some(())
+}
+
+/// Handles Tj
+fn text_tj(tr : &mut TextReader, text : &mut Text, text_objects : &mut Vec<Text>, fonts : &Vec<Font>) -> Option<()>{
+    let Some(str_obj) = tr.stack.get(0) else{
+        return None;
+    };
+    
+    eval_text_section(text, text_objects, tr.y_pos, tr.scaled_font_size);
+
+    // Add text
+    let PdfVar::StringLiteral(string_lit) = str_obj else{
+        return None;
+    };
+    add_str_lit(text, string_lit, fonts);
+    Some(())
+}
+
+/// Handles T*
+fn text_asterisk(tr : &mut TextReader) -> Option<()>{
+    tr.y_pos = -tr.leading * tr.scale;
+    Some(())
+}
+
+/// Handles Td
+fn text_td(tr : &mut TextReader, text : &mut Text) -> Option<()>{
+    let Some(tx_obj) = tr.stack.get(0) else {
+        return None;
+    };
+    let Some(ty_obj) = tr.stack.get(1) else {
+        return None;
+    };
+    let Some(tx) = tx_obj.get_f64() else {
+        return None;
+    };
+    let Some(ty) = ty_obj.get_f64() else {
+        return None;
+    };
+
+    // If x-move is large, we have a space
+    if tx > 150.0{
+        text.chars.push(' ');
+    }
+
+    // Set new value for y-pos, if it is a new BT section position is reset to 0 and then updated
+    tr.y_pos = tr.y_pos + ty * tr.scale;
+    Some(())
+}
+
+/// Handles Tm
+fn text_tm(tr : &mut TextReader) -> Option<()>{
+    let Some(ty_obj) = tr.stack.get(5) else{
+        return None;
+    };
+    let Some(scale_obj) = tr.stack.get(0) else{
+        return None;
+    };
+
+    // Get values
+    let Some(ty) = ty_obj.get_f64() else{
+        return None;
+    };
+    let Some(new_scale) = scale_obj.get_f64() else{
+        return None;
+    };
+
+    
+    tr.scale = new_scale;
+    tr.y_pos = ty;
+    tr.scaled_font_size = tr.font_size*tr.scale;
+    Some(())
+}
+
+/// Handles TL
+fn text_tl(tr : &mut TextReader, inverse : bool) -> Option<()>{
+    let mut index = 0;
+    let mut factor = 1.0;
+    if inverse {
+        index = 1;
+        factor = -1.0;
+    }
+    let Some(l_obj) = tr.stack.get(index) else{
+        return None;
+    };
+    let Some(lf) = l_obj.get_f64() else{
+        return None;
+    };
+    tr.leading = lf*factor;
+    Some(())
+}
+
+/// Handles Tf
+fn text_tf(tr : &mut TextReader, text : &mut Text) -> Option<()>{
+    let Some(font_name_obj) = tr.stack.get(0) else{
+        return None;
+    };
+    let Some(font_name) = font_name_obj.get_name() else{
+        return None;
+    };
+    let Some(font_size_obj) = tr.stack.get(1) else {
+        return None;
+    };
+    let Some(font_size_tmp) = font_size_obj.get_f64() else{
+        return None;
+    };
+
+    text.font = font_name;
+    tr.font_size = font_size_tmp;
+    tr.scaled_font_size = tr.font_size*tr.scale;
+    Some(())
+}
+
+/// Handle TJ
+fn text_tj_array(tr : &mut TextReader, text : &mut Text, text_objects : &mut Vec<Text>, fonts : &Vec<Font>) -> Option<()>{
+    let Some(tj_obj) = tr.stack.get(0) else{
+        return None;
+    };
+    let PdfVar::Array(tj_array) = tj_obj else{
+        return None;
+    };
+
+    eval_text_section(text, text_objects, tr.y_pos, tr.scaled_font_size);
+
+    // Add the text to the text section
+    for pdfvar in tj_array{
+        if let Some(num) = pdfvar.get_f64(){
+            if num < -165.0 {
+                text.chars.push(' ');
+            }
+            continue;
+        }
+        if let PdfVar::StringLiteral(string_lit) = pdfvar {
+            add_str_lit(text, string_lit, fonts);
+            continue;
+        }
+        return None;
+    }
+    Some(())
 }
 
 fn add_str_lit(text : &mut Text, string_lit : &Vec<u32>, fonts : &Vec<Font>){
@@ -538,40 +579,33 @@ fn add_str_lit(text : &mut Text, string_lit : &Vec<u32>, fonts : &Vec<Font>){
         }
     }
 
-    // let mut s = String::new();
+    let mut s = String::new();
     // Iterate over all chars
     for key in string_lit{
         if *key == 0{
             continue;
         }
-        // println!("Font-- {:?}", font);
-        // let u = font.mapping.contains_key(key);
-        // println!("Contains {}", u);
+        
         let Some(x_vec) = font.mapping.get(key) else {
             text.chars.push_str(decode_pdfdoc_char(*key).as_str());
-            // println!("Char1 {}, {}", key, decode_pdfdoc_char(*key).as_str());
+            s.push_str(decode_pdfdoc_char(*key).as_str());
             continue;
         };
         for x in x_vec{
             let Some(uc) = char::from_u32(*x) else {
-                // println!("Failed to map {}", x);
                 continue;
             };
+            s.push(uc);
             text.chars.push(uc);
-            // text.chars.push_str(&decode_pdfdoc_char(*x).as_str());
-            // println!("Char {}, {}", key, uc);
-            // s.push_str(&decode_pdfdoc_char(*x).as_str());
         }
     }
-    // println!("String {}", s);
 }
 
 /// Evaluates if a new text segment belongs to the current text section, creates a new text section otherwise
 fn eval_text_section(text : &mut Text, text_objects : &mut Vec<Text>, y_pos : f64, scaled_font_size : f64){
     // Compare y-position of last text to the new one
     let diff = (text.pos_y-y_pos).abs();
-    // println!("Diff {}", diff);
-    // println!("Scfz {}", scaled_font_size);
+
     if diff > 3.0*text.scaled_font_size {
         // New Text section
         add_text_section(text, text_objects, y_pos, scaled_font_size);

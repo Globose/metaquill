@@ -1,8 +1,6 @@
-use std::{collections::HashMap, task::Context, vec};
+use std::{collections::HashMap, vec};
 
-use lzw::{DecoderEarlyChange, LsbReader};
-
-use crate::{decoding::{decode_flate, decode_lzw, decode_pdfdoc, handle_decodeparms}, document::{Document, PdfDocError}, print_raw};
+use crate::{decoding::{decode_flate, decode_pdfdoc, handle_decodeparms}, document::{Document, PdfError}};
 
 #[derive(Debug, Clone)]
 pub enum PdfVar {
@@ -18,38 +16,6 @@ pub enum PdfVar {
     IndirectObject(usize),
     Object{_id : usize, content : Vec<PdfVar>},
     ObjectRef(usize),
-}
-
-#[derive(Debug)]
-pub enum PdfParseError {
-    NumParseError,
-    EmptyDictionary,
-    DictionaryKeyNotName,
-    IncorrectHexNumber,
-    IncorrectHexString,
-    NoStringEnding,
-    NameCharNotAllowed,
-    UnknownConst,
-    ObjectRefError,
-    ObjectRefNotInteger,
-    ObjectRefSignedInteger,
-    UnmatchedChar,
-    NoEndobjFound,
-    EmptyObject,
-    NoObjRef,
-    PdfLoadError,
-    PdfHeaderError,
-    StartXrefNotFound,
-    OutOfBounds,
-    XrefObjectError,
-    StreamError,
-    FlateDecodeError,
-    DecodeDataError,
-    UnknownFilter,
-    XrefTableError,
-    TrailerNotFound,
-    TrailerError,
-    XrefError,
 }
 
 impl PdfVar {
@@ -75,25 +41,25 @@ impl PdfVar {
     }
     
     /// Get an array from unsigned integer array, or from an integer
-    pub fn get_usize_array(&self, doc : &mut Document) -> Option<Vec<usize>>{
+    pub fn get_usize_array(&self) -> Option<Vec<usize>>{
         let PdfVar::Array(array) = self else{
-            if let Some(value) = self.get_indirect_obj_index(doc){
+            if let Some(value) = self.get_indirect_obj_index(){
                 return Some(vec![value]);
             }
             return None;
         };
         let mut output : Vec<usize> = Vec::new();
         for obj in array{
-            let value = obj.get_indirect_obj_index(doc)?;
+            let value = obj.get_indirect_obj_index()?;
             output.push(value);
         }
         return Some(output);
     }
 
     /// Get integer value from dictionary key
-    pub fn get_dict_int(&self, key : &str, doc : &mut Document) -> Option<usize> {
+    pub fn get_dict_int(&self, key : &str) -> Option<usize> {
         let int_object = self.get_dict_value(key)?;
-        int_object.get_indirect_obj_index(doc)
+        int_object.get_indirect_obj_index()
     }
 
     /// Returns the String of a name object
@@ -101,6 +67,25 @@ impl PdfVar {
         if let PdfVar::Name(name) = self{
             return Some(name.to_string());
         };
+        return None;
+    }
+
+    /// Returns a list of String of name objects in an array. 
+    /// If only one Name, an array with one String will be returned
+    pub fn get_names(&self) -> Option<Vec<String>> {
+        if let PdfVar::Name(name) = self{
+            return Some(vec![name.to_string()]);
+        };
+        let mut names : Vec<String> = Vec::new();
+        if let PdfVar::Array(name_arr) = self {
+            for elem in name_arr {
+                let PdfVar::Name(name) = elem else {
+                    return None;
+                };
+                names.push(name.clone());
+            }
+            return Some(names);
+        }
         return None;
     }
 
@@ -112,14 +97,13 @@ impl PdfVar {
     }
 
     /// Get index of indirect object. If called with an integer, that value is returned
-    pub fn get_indirect_obj_index(&self, doc : &mut Document) -> Option<usize>{
+    pub fn get_indirect_obj_index(&self) -> Option<usize>{
         if let PdfVar::IndirectObject(value) = self{
             return Some(*value);
         };
-        if let PdfVar::Integer { value, signed } = self {
+        if let PdfVar::Integer { value, signed: _ } = self {
             return Some(*value as usize);
         };
-        println!("Failed to get indirect obj index");
         return None;
     }
 
@@ -133,7 +117,7 @@ impl PdfVar {
         };
         if let PdfVar::IndirectObject(obj_id) = self {
             let doc_ix = doc.it;
-            let Ok(object) = doc.get_object_by_id(*obj_id) else {
+            let Some(object) = doc.get_object_by_id(*obj_id) else {
                 doc.it = doc_ix;
                 return None;
             };
@@ -144,7 +128,7 @@ impl PdfVar {
             let Some(integer) = content.get(1) else {
                 return None;
             };
-            if let PdfVar::Integer { value, signed } = integer{
+            if let PdfVar::Integer { value, signed: _ } = integer{
                 return Some(value.abs() as usize);
             }
         }
@@ -153,7 +137,7 @@ impl PdfVar {
 
     /// Get f64 from integer or real
     pub fn get_f64(&self) -> Option<f64>{
-        if let PdfVar::Integer { value, signed } = self {
+        if let PdfVar::Integer { value, signed: _ } = self {
             return Some(*value as f64);
         };
         if let PdfVar::Real(f) = self {
@@ -168,59 +152,61 @@ impl PdfVar {
         let PdfVar::Object { _id, content } = &self else{
             return None;
         };
-
+        
         // Stream object should be on index 2
         let Some(stream_obj) = content.get(2) else{
             return None;
         };
-
+        
         // Fetch stream information
         let PdfVar::Stream { start, size } = stream_obj else{
             return None;
         };
 
         // Get filter type
-        let mut filter = String::new();
+        let mut filters : Vec<String> = Vec::new();
         if let Some(filter_obj) = self.get_dict_value("Filter") {
-            if let Some(fname) = filter_obj.get_name(){
-                filter = fname;
+            if let Some(fname) = filter_obj.get_names(){
+                filters = fname;
             }
         };
 
         // Match filter type
-        match filter.as_str() {
-            "FlateDecode" =>{
-                return decode_flate_stream(doc, *start, *size, self);
-            }
-            "LZWDecode" => {
-                return decode_lzw(doc, *start, *size, self);
-            }
-            _ => {
-                println!("Unknown filter type {}", filter);
+        let mut decoded = doc.data[*start..*start+*size].to_vec();
+        for filter in filters{
+            match filter.as_str() {
+                "FlateDecode" =>{
+                    let Ok(_) = decode_flate(&mut decoded) else {
+                        return None;
+                    };
+                }
+                "LZWDecode" => {
+                    // Not implemented
+                    return None;
+                }
+                "" => {
+                    decoded = doc.data[*start..*start+*size].to_vec();
+                }
+                _ => {
+                    // Unknown filter type
+                    return None;
+                }
             }
         }
-        
-        return None;
-    }
 
-    /// Returns stream (start,size)
-    pub fn get_stream(&self) -> Option<(usize,usize)>{
-        let PdfVar::Object{ _id, content } = &self else{
+        // Handle DecodeParms
+        if let Some(decodeparms_obj) = self.get_dict_value("DecodeParms"){
+            if let Ok(vec) = handle_decodeparms(decoded, decodeparms_obj, doc) {
+                return Some(vec);
+            }
             return None;
         };
         
-        let Some(object_stream) = content.get(2) else{
-            return None;
-        };
-
-        let PdfVar::Stream{start : stream_start, size:stream_size} = object_stream else{
-            return None;
-        };
-        return Some((*stream_start, *stream_size));
+        return Some(decoded);
     }
 
     /// Parses a document object starting from index
-    pub fn from(doc : &mut Document, index : usize) -> Result<Self, PdfParseError>{
+    pub fn from(doc : &mut Document, index : usize) -> Result<Self, PdfError>{
         // The objects inside this object is placed into obj_stack
         let mut obj_stack : Vec<PdfVar> = Vec::new();
         doc.it = index;
@@ -229,7 +215,7 @@ impl PdfVar {
         // Loop until endobj-tag is found
         loop {
             if doc.it >= doc.size(){
-                return Err(PdfParseError::NoEndobjFound);
+                return Err(PdfError::NoEndobjFound);
             }
             parse_object(doc, &mut obj_stack)?;
             doc.skip_whitespace();
@@ -240,13 +226,13 @@ impl PdfVar {
         }
 
         if obj_stack.len() < 2{
-            return Err(PdfParseError::EmptyObject);
+            return Err(PdfError::EmptyObject);
         }
         let Some(first_obj) = obj_stack.get(0) else{
-            return Err(PdfParseError::EmptyObject);
+            return Err(PdfError::EmptyObject);
         };
         let PdfVar::ObjectRef(obj_ref) = first_obj else{
-            return Err(PdfParseError::NoObjRef);
+            return Err(PdfError::NoObjRef);
         };
         return Ok(PdfVar::Object{_id:obj_ref.clone(), content:obj_stack});
     }
@@ -255,7 +241,7 @@ impl PdfVar {
 // Help functions:
 
 /// Parses pdf types (int, real, array, indirect obj, strings, dictionaries, names, booleans, null, stream)
-pub fn parse_object(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result<(),PdfParseError>{
+pub fn parse_object(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result<(),PdfError>{
     doc.skip_whitespace();
     match doc.byte(){
         (48..58) | b'+' | b'-' | b'.' =>{
@@ -298,28 +284,13 @@ pub fn parse_object(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result<(),
             return obj_parse_stream(doc, stack);
         }
         _ => {
-            // println!("uk char {}", rd.byte() as char);
-            // print_raw(&rd.data, rd.it, 40);
-            // println!("\n----");
         }
     }
-    Err(PdfParseError::UnmatchedChar)
-}
-
-/// Decodes a FlateDecode stream
-fn decode_flate_stream(doc : &mut Document, start : usize, size : usize, obj_dict : &PdfVar) -> Option<Vec<u8>>{
-    let Some(decoded) = decode_flate(doc, start, size) else {
-        return None;
-    };
-
-    if let Some(decodeparms_obj) = obj_dict.get_dict_value("DecodeParms"){
-        return handle_decodeparms(decoded, decodeparms_obj, doc);
-    };
-    return Some(decoded);
+    Err(PdfError::UnmatchedChar)
 }
 
 /// Parse array object
-fn obj_parse_array(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result<(), PdfParseError>{
+fn obj_parse_array(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result<(), PdfError>{
     doc.it += 1;
 
     // The objects in the array are stored in the array stack
@@ -338,7 +309,7 @@ fn obj_parse_array(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result<(), 
 }
 
 /// Parse null, true and false
-fn obj_parse_const(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result<(), PdfParseError>{
+fn obj_parse_const(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result<(), PdfError>{
     if cmp_u8(&doc.data, doc.it, b"null"){
         doc.it += 4;
         stack.push(PdfVar::Null);
@@ -349,13 +320,13 @@ fn obj_parse_const(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result<(), 
         doc.it += 5;
         stack.push(PdfVar::Boolean(false));
     } else{
-        return Err(PdfParseError::UnmatchedChar);
+        return Err(PdfError::UnmatchedChar);
     }
     Ok(())
 }
 
 /// Parse dictionary object
-fn obj_parse_dictionary(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result<(), PdfParseError>{
+fn obj_parse_dictionary(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result<(), PdfError>{
     // Skip <<
     doc.it += 2;
     let mut dict_stack : Vec<PdfVar> = Vec::new();
@@ -375,13 +346,13 @@ fn obj_parse_dictionary(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result
     // Pop 2 items at a time, key and value
     while dict_stack.len() > 0{
         let Some(obj2) = dict_stack.pop() else{
-            return Err(PdfParseError::EmptyDictionary); 
+            return Err(PdfError::EmptyDictionary); 
         };
         let Some(obj1) = dict_stack.pop() else {
-            return Err(PdfParseError::EmptyDictionary); 
+            return Err(PdfError::EmptyDictionary); 
         };
         let PdfVar::Name(obj1_name) = obj1 else{
-            return Err(PdfParseError::DictionaryKeyNotName);
+            return Err(PdfError::DictionaryKeyNotName);
         };
         dict.insert(obj1_name, obj2);
     }
@@ -390,7 +361,7 @@ fn obj_parse_dictionary(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result
 }
 
 /// Parse Hex String
-fn obj_parse_hex_string(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result<(), PdfParseError>{
+fn obj_parse_hex_string(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result<(), PdfError>{
     let mut hex_vector : Vec<u32> = Vec::new();
     doc.it += 1;
 
@@ -408,7 +379,7 @@ fn obj_parse_hex_string(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result
         doc.it += 2;
     }
     if doc.byte() != b'>' {
-        return Err(PdfParseError::IncorrectHexString);
+        return Err(PdfError::IncorrectHexString);
     }
     doc.it += 1;
     stack.push(PdfVar::StringLiteral(hex_vector));
@@ -416,7 +387,7 @@ fn obj_parse_hex_string(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result
 }
 
 /// Parse pdf name object
-fn obj_parse_name(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result<(), PdfParseError>{
+fn obj_parse_name(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result<(), PdfError>{
     let mut chars : Vec<u32> = Vec::new();
     doc.it += 1;
 
@@ -433,7 +404,7 @@ fn obj_parse_name(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result<(), P
             chars.push(doc.byte() as u32);
             doc.it += 1;
         } else{
-            return Err(PdfParseError::NameCharNotAllowed);
+            return Err(PdfError::NameCharNotAllowed);
         }
     }
     let name : String = decode_pdfdoc(&chars);
@@ -442,7 +413,7 @@ fn obj_parse_name(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result<(), P
 }
 
 /// Parses a numeric object
-fn obj_parse_numeric(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result<(), PdfParseError>{
+fn obj_parse_numeric(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result<(), PdfError>{
     let signed = doc.byte() == b'+' || doc.byte() == b'-';
     let mut number_str = String::new();
     
@@ -456,7 +427,7 @@ fn obj_parse_numeric(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result<()
         stack.push(PdfVar::Integer{value : number_i64 as i64, signed : signed});
     } else{
         let Ok(number_f64) = number_str.parse::<f64>() else {
-            return Err(PdfParseError::NumParseError);
+            return Err(PdfError::NumParseError);
         };
         stack.push(PdfVar::Real(number_f64));
     }
@@ -464,40 +435,40 @@ fn obj_parse_numeric(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result<()
 }
 
 /// Parse indirec object (D D R) or object head (D D obj)
-fn obj_parse_object_ref(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result<(), PdfParseError>{
+fn obj_parse_object_ref(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result<(), PdfError>{
     let mut indirect_obj = false;
     // print_raw(&rd.data, rd.it, 10);
     if doc.byte() == b'R' {
         // Next char has to be a delimiter
         if !is_delimiter(&doc.data, doc.it+1){
-            return  Err(PdfParseError::UnmatchedChar);
+            return Err(PdfError::UnmatchedChar);
         }
         doc.it += 1;
         indirect_obj = true;
     } else if cmp_u8(&doc.data, doc.it, b"obj"){
         doc.it += 3;
     } else{
-        return Err(PdfParseError::ObjectRefError);
+        return Err(PdfError::ObjectRefError);
     }
     
     // 2 previous integers gets popped from stack
     let Some(arg_2) = stack.pop() else{
-        return Err(PdfParseError::ObjectRefError);
+        return Err(PdfError::ObjectRefError);
     };
     let Some(arg_1) = stack.pop() else{
-        return Err(PdfParseError::ObjectRefError);
+        return Err(PdfError::ObjectRefError);
     };
 
     // Inspect arg_1, arg_2
     let PdfVar::Integer{ value : a1_value, signed : a1_signed} = arg_1 else {
-        return Err(PdfParseError::ObjectRefNotInteger);
+        return Err(PdfError::ObjectRefNotInteger);
     };
     let PdfVar::Integer{ value : _a2_value, signed : a2_signed} = arg_2 else {
-        return Err(PdfParseError::ObjectRefNotInteger);
+        return Err(PdfError::ObjectRefNotInteger);
     };
 
     if a1_signed || a2_signed{
-        return Err(PdfParseError::ObjectRefSignedInteger);
+        return Err(PdfError::ObjectRefSignedInteger);
     }
 
     if indirect_obj {
@@ -510,32 +481,30 @@ fn obj_parse_object_ref(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result
 }
 
 /// Parse an object stream
-fn obj_parse_stream(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result<(), PdfParseError>{
+fn obj_parse_stream(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result<(), PdfError>{
     if !cmp_u8(&doc.data, doc.it, b"stream"){
-        return Err(PdfParseError::UnmatchedChar);
+        return Err(PdfError::UnmatchedChar);
     }
-    // print_raw(&doc.data, doc.it-200, 240);
-    // println!("\n---\n");
 
     doc.it += 6;
     doc.skip_whitespace();
     
-    let mut start:usize = doc.it;
+    let start:usize = doc.it;
     let Some(stream_dict_obj) = stack.last() else{
-        return Err(PdfParseError::StreamError);
+        return Err(PdfError::StreamError);
     };
     let Some(length_obj) = stream_dict_obj.get_dict_value("Length") else{
-        return Err(PdfParseError::StreamError);
+        return Err(PdfError::StreamError);
     };
     let Some(size) = length_obj.get_usize(doc) else{
-        return Err(PdfParseError::StreamError);
+        return Err(PdfError::StreamError);
     };
 
     doc.it += size;
     doc.skip_whitespace();
 
     if !cmp_u8(&doc.data, doc.it, b"endstream"){
-        return Err(PdfParseError::StreamError);
+        return Err(PdfError::StreamError);
     }
     doc.it += 9;
     stack.push(PdfVar::Stream{start:start,size:size});
@@ -543,14 +512,14 @@ fn obj_parse_stream(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result<(),
 }
 
 /// Parse an object string literal
-fn obj_parse_string_literal(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result<(), PdfParseError>{
+fn obj_parse_string_literal(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result<(), PdfError>{
     let mut parenthesis_depth = 1;
     let mut literal : Vec<u32> = Vec::new();
     let mut reading_err = false; // set to true when reading error occurs
     loop {
         doc.it += 1;
         if doc.it >= doc.size(){
-            return Err(PdfParseError::NoStringEnding);
+            return Err(PdfError::NoStringEnding);
         }
         match doc.byte() {
             b'\\' => {
@@ -591,7 +560,7 @@ fn obj_parse_string_literal(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Re
 }
 
 /// Converts hexadecimal symbols into one decimal value
-pub fn to_hex(nums : &[u8]) -> Result<u32,PdfParseError>{
+pub fn to_hex(nums : &[u8]) -> Result<u32,PdfError>{
     let mut value : u32 = 0;
     for num in nums{
         let v1 = match num {
@@ -599,7 +568,7 @@ pub fn to_hex(nums : &[u8]) -> Result<u32,PdfParseError>{
             b'a'..=b'f' => num - 87,
             b'0'..=b'9' => num - 48,
             _ => {
-                return Err(PdfParseError::IncorrectHexNumber);
+                return Err(PdfError::IncorrectHexNumber);
             }
         };
         value = value * 16 + v1 as u32;
