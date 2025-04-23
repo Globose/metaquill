@@ -1,6 +1,8 @@
-use std::{fs::{self, read_dir}, io};
+use std::{fs::{self}, io};
 
-use crate::{decoding::get_256_repr, pdf_object::{cmp_u8, parse_object, PdfVar}, text_parser::{get_page_resources, read_objects_text, Text}};
+use crate::text_parser::{get_page_resources, read_objects_text, Text};
+use crate::pdf_object::{cmp_u8, parse_object, PdfVar};
+use crate::decoding::get_256_repr;
 
 #[derive(Debug)]
 struct Trailer{
@@ -22,53 +24,32 @@ struct ObjectRef {
 pub struct Document {
     xref : Vec<ObjectRef>,
     trailer : Trailer,
-    pub data : Vec<u8>,
-    pub it : usize,
+    pub(crate) data : Vec<u8>,
+    pub(crate) it : usize,
 }
 
 #[derive(Debug)]
 pub enum PdfError {
-    ParsingError,
-    KeyNotFound,
-    FileDirError,
-    EmptyObject,
-    NumParseError,
-    EmptyDictionary,
-    DictionaryKeyNotName,
-    IncorrectHexNumber,
-    IncorrectHexString,
-    NoStringEnding,
-    NameCharNotAllowed,
-    ObjectRefError,
-    ObjectRefNotInteger,
-    ObjectRefSignedInteger,
-    UnmatchedChar,
-    NoEndobjFound,
-    NoObjRef,
-    PdfLoadError,
-    PdfHeaderError,
-    StartXrefNotFound,
-    OutOfBounds,
-    StreamError,
-    DecodeDataError,
-    XrefTableError,
-    TrailerNotFound,
-    TrailerError,
-    XrefError,
     DecodeError,
+    DictionaryError,
+    DocumentError,
+    HexError,
+    LoadError,
+    ObjectError,
+    ObjectRefError,
+    PdfHeaderError,
+    StreamError,
+    UnmatchedChar,
+    XrefError,
 }
 
+// Constants
 const U_STARTXREF : &[u8] = b"startxref";
 const U_PDF : &[u8] = b"%PDF";
 const U_TRAILER : &[u8] = b"trailer";
 const U_XREF : &[u8] = b"xref";
 const C_PREV : &str = "Prev";
-const C_ROOT : &str = "Root";
-const C_INFO : &str = "Info";
 const C_SIZE : &str = "Size";
-const C_W : &str = "W";
-const C_INDEX : &str = "Index";
-const C_ENCRYPT : &str = "Encrypt";
 
 impl Document {
     /// Read Text Sections From Page
@@ -83,11 +64,9 @@ impl Document {
         // Get ids of content
         // If contents is non-existent page is empty
         let Some(page_contents) = page_object.get_dict_value("Contents") else{
-            println!("No contents found");
             return None;
         };
         let Some(content_ids) = page_contents.get_usize_array() else{
-            println!("Failed to get usize array contents");
             return None;
         };
         
@@ -95,7 +74,7 @@ impl Document {
     }
 
     /// Returns a page, given a page number
-    pub fn get_page_no(&mut self, page_nr : usize) -> Option<PdfVar>{
+    pub(crate) fn get_page_no(&mut self, page_nr : usize) -> Option<PdfVar>{
         let root = self.trailer.root;
         let mut page_ids : Vec<usize> = Vec::new();
 
@@ -126,7 +105,7 @@ impl Document {
 
     /// Returns an object with given id
     /// Unpacks the object if it is in an object stream
-    pub fn get_object_by_id(&mut self, obj_id : usize) -> Option<PdfVar>{
+    pub(crate) fn get_object_by_id(&mut self, obj_id : usize) -> Option<PdfVar>{
         // Fetch the object index in the xref table
         let (mut xref_1, mut compr_1) = {
             let Some(obj_ref) = self.xref.get(obj_id) else{
@@ -167,31 +146,18 @@ impl Document {
     }
 
     /// Returns a value from the documents info directory, based on a given key
-    pub fn get_info(&mut self, key : &str) -> Result<String,PdfError>{
+    pub fn get_info(&mut self, key : &str) -> Option<String>{
         let info_ref = self.trailer.info;
-        
-        let info_obj = match self.get_object_by_id(info_ref) {
-            Some(x) => x,
-            None => return Err(PdfError::ParsingError),
-        };
-        
-        // Get info record
-        let Some(info_entry_obj) = info_obj.get_dict_value(key) else{
-            return Err(PdfError::KeyNotFound);
-        };
-
-        let Some(info_str) = info_entry_obj.get_str() else{
-            return Err(PdfError::ParsingError);
-        };
-
-        Ok(info_str)
+        let info_obj = self.get_object_by_id(info_ref)?;
+        let info_entry_obj = info_obj.get_dict_value(key)?;
+        info_entry_obj.get_str()
     }
 
-    pub fn from(filepath : &str) -> Result<Self, PdfError>{
+    pub(crate) fn from(filepath : &str) -> Result<Self, PdfError>{
         let doc_u8: Vec<u8> = match load_document(&filepath) {
             Ok(d) => d,
             Err(_e) => {
-                return Err(PdfError::PdfLoadError);
+                return Err(PdfError::LoadError);
             }
         };
         let xref_table : Vec<ObjectRef> = Vec::new();
@@ -216,17 +182,17 @@ impl Document {
     }
 
     /// Returns the u8 char value at the current position in the reader. 
-    pub fn byte(&self)->u8{
+    pub(crate) fn byte(&self)->u8{
         return self.data[self.it];
     }
 
     /// Moves the documents position (it) forward until first non whitespace char 
-    pub fn skip_whitespace(&mut self){
+    pub(crate) fn skip_whitespace(&mut self){
         self.it = skip_whitespace(&self.data, self.it);
     }
 
     /// Moves the position (it) to a new non empty line
-    pub fn next_line(&mut self){
+    pub(crate) fn next_line(&mut self){
         while !matches!(self.byte(), 10 | 13){
             self.it += 1;
         }
@@ -238,7 +204,7 @@ impl Document {
 
 
 /// Iterates over vector from ix, returns first non whitespace index
-pub fn skip_whitespace(doc_u8 : &Vec<u8>, start: usize) -> usize{
+pub(crate) fn skip_whitespace(doc_u8 : &Vec<u8>, start: usize) -> usize{
     let mut it = start;
     while doc_u8[it].is_ascii_whitespace(){
         it += 1;
@@ -246,82 +212,8 @@ pub fn skip_whitespace(doc_u8 : &Vec<u8>, start: usize) -> usize{
     return it;
 }
 
-/// Reads all the documents in a directory, including sub-directories. ONLY FOR TESTING
-pub fn read_pdf_in_dir(filepath : &str) -> Result<(usize,usize),PdfError>{
-    let mut pdfs_read = 0;
-    let mut pdfs_accepted = 0;
-
-    let dir = match read_dir(filepath){
-        Ok(x) => x,
-        Err(_e) => {
-            return Err(PdfError::FileDirError);
-        }
-    };
-
-    // Iterate over each directory entry
-    for path in dir{
-        // Control directory entry
-        let Ok(dir_entry) = path else{
-            continue;
-        };
-
-        // Load the file type
-        let Ok(ftype) = dir_entry.file_type() else{
-            continue;
-        };
-
-        let dir_entry_path = dir_entry.path();
-        let Some(new_path) = dir_entry_path.as_os_str().to_str() else{
-            continue;
-        };
-
-        // If directory entry is a directory, do a recursive call
-        if ftype.is_dir(){
-            if let Ok(pdf_cnt) = read_pdf_in_dir(new_path){
-                pdfs_read += pdf_cnt.0;
-                pdfs_accepted += pdf_cnt.1;
-            }
-        }
-        else{
-            match read_one_pdf(new_path) {
-                Ok(mut pdf) => {
-                    println!("Doc {}, enc: {}", new_path, pdf.is_encrypted());
-
-                    if !pdf.is_encrypted(){       
-                        let mut author = String::new();
-                        let mut title = String::new();
-                        if let Ok(value) = pdf.get_info("Author"){
-                            author = value;
-                        };
-                        if let Ok(value) = pdf.get_info("Title"){
-                            title = value;
-                        };
-                        // println!("A: {}, T: {}", author, title);
-                        
-                        if let Some(text_objects) = pdf.get_text_from_page(0){
-                            // println!("Textobjects {}", text_objects.len());
-                            // for text_obj in text_objects{
-                                //     println!("---");
-                            //     println!("Pos Y: {}", text_obj.pos_y);
-                            //     println!("Font size: {}", text_obj.scaled_font_size);
-                            //     println!("Text (r): {:?}", text_obj.chars);
-                            //     println!("Text: {}", text_obj.chars);
-                            // }
-                        }
-                    }
-                },
-                Err(e) =>{
-                    println!("Error when reading {} pdf {:?}", new_path, e);
-                }
-            }
-            pdfs_read += 1;
-        }
-    }
-    Ok((pdfs_read,pdfs_accepted))
-}
-
 /// Reads one pdf document
-pub fn read_one_pdf(filepath : &str) -> Result<Document,PdfError>{
+pub(crate) fn read_one_pdf(filepath : &str) -> Result<Document,PdfError>{
     let pdf = Document::from(filepath)?;
     Ok(pdf)
 }
@@ -334,14 +226,14 @@ fn read_start_xref(doc : &mut Document) -> Result<usize,PdfError>{
     // Locate startxref at end of document
     loop {
         if doc.size()-doc.it > 100 || doc.it == 0{
-            return Err(PdfError::StartXrefNotFound);
+            return Err(PdfError::XrefError);
         }
         if doc.byte() == b's'{
             if cmp_u8(&doc.data, doc.it, U_STARTXREF){
                 doc.it+=9;
                 break;
             }
-            return Err(PdfError::StartXrefNotFound);
+            return Err(PdfError::XrefError);
         }
         doc.it -= 1;
     }
@@ -354,7 +246,7 @@ fn read_start_xref(doc : &mut Document) -> Result<usize,PdfError>{
     }
 
     if startxref == 0{
-        return Err(PdfError::StartXrefNotFound);
+        return Err(PdfError::XrefError);
     }
     Ok(startxref)
 }
@@ -362,7 +254,7 @@ fn read_start_xref(doc : &mut Document) -> Result<usize,PdfError>{
 /// Confirms that file begins with %PDF
 fn parse_pdf_version(doc : &mut Document) -> Result<(),PdfError>{
     if !cmp_u8(&doc.data, 0, U_PDF){
-        return Err(PdfError::PdfHeaderError);
+        return Err(PdfError::DocumentError);
     }
     Ok(())
 }
@@ -383,7 +275,7 @@ fn parse_xref(doc : &mut Document, start : usize, createtrailer : bool) -> Resul
     doc.it = start;
 
     if doc.size() <= doc.it{
-        return Err(PdfError::OutOfBounds);
+        return Err(PdfError::XrefError);
     }
 
     if doc.byte().is_ascii_digit(){
@@ -404,7 +296,6 @@ fn parse_xref(doc : &mut Document, start : usize, createtrailer : bool) -> Resul
     } else{
         return Err(PdfError::XrefError);
     }
-    // println!("Trailer {:?}", doc.trailer);
     Ok(())
 }
 
@@ -412,23 +303,23 @@ fn parse_table_trailer(doc : &mut Document, createtrailer : bool) -> Result<(),P
     // Parse trailer. First verify that next is trailer
     doc.skip_whitespace();
     if !cmp_u8(&doc.data, doc.it, U_TRAILER){
-        return Err(PdfError::TrailerNotFound);
+        return Err(PdfError::XrefError);
     }
     doc.it += 7;
     let mut stack : Vec<PdfVar> = Vec::new();
     parse_object(doc, &mut stack)?;
     if stack.len() != 1{
-        return Err(PdfError::TrailerError);
+        return Err(PdfError::XrefError);
     }
     let Some(trailer_dict) = stack.get(0) else {
-        return Err(PdfError::TrailerError);
+        return Err(PdfError::XrefError);
     };
 
     
     if let Some(prev_obj) = trailer_dict.get_dict_value(C_PREV){
         match prev_obj.get_indirect_obj_index() {
             Some(x) => parse_xref(doc, x, false)?,
-            None => return Err(PdfError::TrailerError),
+            None => return Err(PdfError::XrefError),
         };
     };
     
@@ -441,12 +332,12 @@ fn parse_table_trailer(doc : &mut Document, createtrailer : bool) -> Result<(),P
 /// Parses an xref table
 fn parse_xref_table(doc : &mut Document) -> Result<(),PdfError>{
     if !cmp_u8(&doc.data, doc.it, U_XREF){
-        return Err(PdfError::XrefTableError);
+        return Err(PdfError::XrefError);
     }
     doc.it += 4;
     doc.skip_whitespace();
     if !doc.byte().is_ascii_digit(){
-        return Err(PdfError::XrefTableError);
+        return Err(PdfError::XrefError);
     }
 
     loop {
@@ -460,7 +351,7 @@ fn parse_xref_table(doc : &mut Document) -> Result<(),PdfError>{
         }
         
         let Some((length, _size2)) = read_number(doc) else{
-            return Err(PdfError::NumParseError);
+            return Err(PdfError::XrefError);
         };
         
         // Adjust size of xref table
@@ -473,10 +364,10 @@ fn parse_xref_table(doc : &mut Document) -> Result<(),PdfError>{
         for i in index..index+length {
             doc.next_line();
             let Some((num1, num1_size)) = read_number(doc) else{
-                return Err(PdfError::NumParseError);
+                return Err(PdfError::XrefError);
             };
             if num1_size != 10{
-                return Err(PdfError::XrefTableError);
+                return Err(PdfError::XrefError);
             }
             doc.xref[i] = ObjectRef { compressed: 1, xref : num1, _version:0};
         }
@@ -505,20 +396,20 @@ fn read_number(doc : &mut Document) -> Option<(usize,usize)>{
 fn parse_xref_object(doc : &mut Document, xref_object : &PdfVar) -> Result<(),PdfError>{
     // Get decoded stream from xref_object
     let Some(decoded) = xref_object.get_decoded_stream(doc) else{
-        return Err(PdfError::EmptyObject);
+        return Err(PdfError::XrefError);
     };
 
     // Fetch W, Size and Index
     // W = [1 2 1], How many bytes are in each column
-    let w = match xref_object.get_dict_value(C_W){
+    let w = match xref_object.get_dict_value("W"){
         Some(x) => match x.get_usize_array(){
             Some(x) => x,
             None => {
-                return Err(PdfError::DecodeDataError)
+                return Err(PdfError::XrefError)
             },
         }
         None => {
-            return Err(PdfError::DecodeDataError);
+            return Err(PdfError::XrefError);
         }
     };
     
@@ -527,20 +418,20 @@ fn parse_xref_object(doc : &mut Document, xref_object : &PdfVar) -> Result<(),Pd
         Some(x) => match x.get_indirect_obj_index(){
             Some(x) => x,
             None => {
-                return Err(PdfError::DecodeDataError);
+                return Err(PdfError::XrefError);
             }
         }
         None => {
-            return Err(PdfError::DecodeDataError);
+            return Err(PdfError::XrefError);
         }
     };
     
     // Index = [3 27] or [641 3 648 4], default = [0 size]. The indexes + sizes for the objects this xref covers
-    let index = match xref_object.get_dict_value(C_INDEX){
+    let index = match xref_object.get_dict_value("Index"){
         Some(x) => match x.get_usize_array(){
             Some(x) => x,
             None =>{
-                return Err(PdfError::DecodeDataError)
+                return Err(PdfError::XrefError)
             }
         }
         None => vec![0,size],
@@ -558,7 +449,7 @@ fn parse_xref_object(doc : &mut Document, xref_object : &PdfVar) -> Result<(),Pd
     
     // Has to be even, given [index size index size...]- pattern
     if index.len()%2 != 0{
-        return Err(PdfError::DecodeDataError);
+        return Err(PdfError::XrefError);
     }
     
     // Interpret the decoded byte stream as xref
@@ -574,14 +465,12 @@ fn parse_xref_object(doc : &mut Document, xref_object : &PdfVar) -> Result<(),Pd
             }
 
             if decoded_pos + cols > decoded.len(){
-                return Err(PdfError::DecodeDataError);
+                return Err(PdfError::XrefError);
             }
 
-            // println!("dec {:?}", decoded);
             let w1 = get_256_repr(&decoded[decoded_pos..decoded_pos+w[0]]);
             let w2 = get_256_repr(&decoded[decoded_pos+w[0]..decoded_pos+w[0]+w[1]]);
             let w3 = get_256_repr(&decoded[decoded_pos+w[0]+w[1]..decoded_pos+cols]);
-            // println!("{}: {}, {}, {}", i, w1, w2, w3);
             doc.xref[i] = ObjectRef{compressed : w1 as u8, xref : w2, _version : w3};
             decoded_pos += cols;
         }
@@ -602,10 +491,9 @@ fn parse_xref_object(doc : &mut Document, xref_object : &PdfVar) -> Result<(),Pd
 
 /// Creates and stores the PDF-trailer
 fn create_trailer(doc : &mut Document, xref_obj : &PdfVar){
-    let fields = [C_INFO, C_ROOT, C_SIZE, C_ENCRYPT];
+    let fields = ["Info", "Root", C_SIZE, "Encrypt"];
     let mut cnt : Vec<usize> = Vec::new();
     for f in fields{
-        // println!("Field {}", f);
         match xref_obj.get_dict_value(f) {
             Some(x) => {
                 cnt.push(
@@ -721,7 +609,6 @@ fn unpack_obj_stm(doc : &mut Document, obj_id : usize){
         // The xref for obj_id should point to this ObjStm, otherwise we dont care
         if let Some(obj_xref) = doc.xref.get(ix_obj_id){
             if obj_xref.xref != obj_id {
-                // println!("Obj id != xref");
                 ix += 2;
                 continue;
             }

@@ -34,12 +34,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lzw"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d947cbb889ed21c2a84be6ffbaebf5b4e0f4340638cba0444907e38b56be084"
-
-[[package]]
 name = "miniz_oxide"
 version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -49,9 +43,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "tag-pdf-to-text"
+name = "tag_pdf_to_text"
 version = "0.1.0"
 dependencies = [
  "flate2",
- "lzw",
 ]

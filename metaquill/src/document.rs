@@ -1,7 +1,10 @@
-use std::{fs::read, path::Path};
+use std::path::Path;
 use lopdf::Document;
+use tag_pdf_to_text::load_pdf_doc;
 use tokio::runtime::Runtime;
-use crate::{call::{call, compare_results}, file_manager::{export_json, export_json_metadata, load_pdf}, metadata::{self, fetch_metadata, is_accepted_title, text_to_metadata, PDFStruct}};
+use crate::file_manager::{export_json, export_json_metadata, load_pdf};
+use crate::metadata::{extract_metadata, fetch_metadata, get_probable_title, is_accepted_title, PDFStruct};
+use crate::call::{call, compare_results};
 
 /// Reads metadata from pdf
 fn read_pdf_metadata (filepath: &str) -> Option<PDFStruct>{
@@ -61,6 +64,12 @@ pub fn read_pdf_dir(path: &Path) -> Option<()>{
         }
     }
     else{
+        let Some(extension) = path.extension() else {
+            return None;
+        };
+        if extension != "pdf" {
+            return None;
+        }
         let file_path_str = path.to_str().unwrap().to_string();
         read_pdf(&file_path_str);
     }
@@ -89,15 +98,33 @@ pub fn evaluate_metadata(pdf : &mut PDFStruct){
 }
 
 pub fn read_pdf(filepath: &str){
+    println!("---");
     println!("{}", filepath);
-    let Some(mut pdf) = read_pdf_metadata(filepath) else {
-        return;
-    };
-    println!("Meta = {}", pdf.metadata_title);
-    // println!("AssumedTitle = {}", pdf.assumed_title);
-    // evaluate_metadata(&mut pdf);
-    // println!("2: MetaTitle = {}, AssumedTitle = {}", pdf.metadata_title, pdf.assumed_title);
 
-    // validate_metadata(pdf);
-    // println!("Pdf metadata {:?}", pdf);
+    // LOPDF:
+    // match read_pdf_metadata(filepath) {
+    //     Some(mut lo_pdf) => {
+    //         println!("AssumedTitle = {}", lo_pdf.metadata_title);
+    //         println!("AssumedTitle = {}", lo_pdf.assumed_title);
+    //         evaluate_metadata(&mut lo_pdf);
+    //         validate_metadata(lo_pdf);
+    //     },
+    //     None => {
+    //         println!("Lo: fail");
+    //     }
+    // };
+    
+    // TAG-PDF:
+    match load_pdf_doc(filepath) {
+        Ok(mut pdf) => {
+            let mut pdf_meta = extract_metadata(&mut pdf, filepath);
+            println!("MetaTitle = {}", pdf_meta.metadata_title);
+            println!("AssumedTitle = {}", pdf_meta.assumed_title);
+            // evaluate_metadata(&mut pdf_meta);
+            // validate_metadata(pdf_meta);
+        }
+        Err(e) =>{
+            println!("Err: {:?}", e);
+        }
+    };
 }

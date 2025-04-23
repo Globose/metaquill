@@ -1,10 +1,13 @@
+use std::char;
 use std::io::Read;
 
-use crate::{document::{Document, PdfError}, pdf_object::PdfVar, PDFDOC_MAP};
+use crate::document::{Document, PdfError};
+use crate::encoding::PDFDOC_MAP;
+use crate::pdf_object::PdfVar;
 use flate2::read::ZlibDecoder;
 
 /// Decodes a u32 char to a String
-pub fn decode_pdfdoc_char(byte : u32) -> String{
+pub(crate) fn decode_pdfdoc_char(byte : u32) -> String{
     if !(32..254).contains(&byte){
         return String::new();
     }
@@ -18,8 +21,30 @@ pub fn decode_pdfdoc_char(byte : u32) -> String{
 }
 
 /// Decodes the PDFDOC text encoding
-pub fn decode_pdfdoc(bytes : &Vec<u32>) -> String{
+pub(crate) fn decode_pdfdoc(bytes : &Vec<u32>) -> String{
     let mut decoded = String::new();
+    
+    // Look for 254 255, UTF16BE
+    let Some(b0) = bytes.get(0) else {
+        return decoded;
+    };
+    if let Some(b1) = bytes.get(1) {
+        if *b0 == 254 && *b1 == 255{
+            let mut ix = 3;
+            while ix < bytes.len(){
+                let d0 = bytes[ix-1] as u8;
+                let d1 = bytes[ix] as u8;
+                let code = u16::from_be_bytes([d0,d1]);
+                if let Some(ch) = char::from_u32(code as u32) {
+                    decoded.push(ch);
+                }
+                ix += 2;
+            }
+            return decoded;
+        }
+    }
+
+    // Not special hex
     for byte in bytes{
         if !(32..254).contains(byte){
             continue;
@@ -35,7 +60,7 @@ pub fn decode_pdfdoc(bytes : &Vec<u32>) -> String{
 }
 
 /// PNG-decoding, returns decoded stream
-pub fn png_decode(stream: &Vec<u8>, _predictor: usize, columns: usize) -> Result<Vec<u8>, PdfError>{
+pub(crate) fn png_decode(stream: &Vec<u8>, _predictor: usize, columns: usize) -> Result<Vec<u8>, PdfError>{
     let mut i : usize = 0;
     let mut decoded : Vec<u8> = Vec::new();
 
@@ -75,7 +100,7 @@ pub fn png_decode(stream: &Vec<u8>, _predictor: usize, columns: usize) -> Result
 }
 
 /// Decode flate stream in place (functionally)
-pub fn decode_flate(data : &mut Vec<u8>) -> Result<(), PdfError>{
+pub(crate) fn decode_flate(data : &mut Vec<u8>) -> Result<(), PdfError>{
     let data_copy = data.clone();
     data.clear();
     let mut decoder = ZlibDecoder::new(data_copy.as_slice());
@@ -91,7 +116,7 @@ pub fn decode_flate(data : &mut Vec<u8>) -> Result<(), PdfError>{
 }
 
 /// Processes a decoded stream based on the decodeparms
-pub fn handle_decodeparms(stream : Vec<u8>, decodeparms_obj : &PdfVar, doc : &mut Document) -> Result<Vec<u8>, PdfError>{
+pub(crate) fn handle_decodeparms(stream : Vec<u8>, decodeparms_obj : &PdfVar, doc : &mut Document) -> Result<Vec<u8>, PdfError>{
     let mut predictor : usize = 1;
     let mut columns : usize = 1;
 
@@ -113,13 +138,12 @@ pub fn handle_decodeparms(stream : Vec<u8>, decodeparms_obj : &PdfVar, doc : &mu
     if (10..16).contains(&predictor){
         return png_decode(&stream, predictor, columns);
     }
-
     return Err(PdfError::DecodeError);
 }
 
 
 /// Converts base 256 to decimal
-pub fn get_256_repr(bytes : &[u8]) -> usize{
+pub(crate) fn get_256_repr(bytes : &[u8]) -> usize{
     let mut output : usize = 0;
     for &byte in bytes{
         output = output * 256 + (byte as usize);

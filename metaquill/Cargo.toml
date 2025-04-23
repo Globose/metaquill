@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 lopdf = "0.35.0"
+tag_pdf_to_text   = { path = "../tag_pdf_to_text" }
 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

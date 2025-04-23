@@ -1,7 +1,7 @@
 use reqwest::Client;
 use serde_json::Value;
-use crate::metadata::{self, PDFStruct};
-use std::{error::Error, result};
+use crate::metadata::PDFStruct;
+use std::error::Error;
 use urlencoding::encode; // Import URL encoding
 use std::time::Duration;
 use tokio::time::timeout;

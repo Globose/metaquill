@@ -2,7 +2,7 @@
 use std::env;
 use std::path::Path;
 use document::read_pdf_dir;
-use file_manager::{create_file, close_file};
+use file_manager::{close_file, create_file};
 mod metadata;
 mod call;
 mod file_manager;
@@ -16,10 +16,10 @@ fn main() {
         return;
     }
 
-    // Create ouputfile
+    // // Create ouputfile
     create_file();
-    // Load the PDF file
+    // // Load the PDF file
     read_pdf_dir(Path::new(&args[1]));
-    // End json output
+    // // End json output
     close_file();
 }
