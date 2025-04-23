@@ -12,6 +12,39 @@ pub fn load_pdf(filepath : &str) -> Result<Document, Error> {
     return Ok(document);
 }
 
+fn extract_num(s : &str) -> u32{
+    let num_rev = s.chars().rev().skip_while(|c| !c.is_ascii_digit())
+        .take_while(|c| c.is_ascii_digit()).collect::<String>();
+    let num_r = num_rev.chars().rev().collect::<String>().parse().unwrap_or(0);
+    return num_r;
+}
+
+pub fn export_csv(meta : &mut Vec<Metadata>){
+    let Ok(mut csv_file) = File::create("meta.csv") else {
+        println!("Failed to create csv");
+        return;
+    };
+    
+    meta.sort_by(|m1,m2| {
+        let n1 = extract_num(&m1.file_path);
+        let n2 = extract_num(&m2.file_path);
+        n1.cmp(&n2)
+    });
+    
+    writeln!(csv_file, "file,title");
+
+    for pdf in meta{
+        let mut line = String::new();
+        let fpath = split_name(&pdf.file_path);
+        line.push_str(&fpath);
+        line.push_str(",");
+        line.push('"');
+        line.push_str(&pdf.title);
+        line.push('"');
+        writeln!(csv_file, "{line}");
+    }
+}
+
 pub fn export_json(extracted_meta: &Metadata, filepath: &str) {
     // Prepare structured metadata for JSON output
     let json_value = json!({
@@ -28,7 +61,7 @@ pub fn export_json(extracted_meta: &Metadata, filepath: &str) {
         "ISSN": extracted_meta.issn,
         "URL": extracted_meta.url,
         "Title Confidence": extracted_meta.title_confidence.to_string() + "%",
-        "PDF Name": split_name(filepath.to_string()),
+        "PDF Name": split_name(&filepath.to_string()),
     });
 
     // Print JSON to console in a readable format
@@ -40,14 +73,14 @@ pub fn export_json(extracted_meta: &Metadata, filepath: &str) {
     }
 }
 
-pub fn split_name(filepath: String) -> Option<String>{
+pub fn split_name(filepath: &str) -> String{
     // Split by slash and take the last part
     let normalized = filepath.replace('\\', "/");
     
-    normalized
-        .split('/')
-        .last()
-        .map(|s| s.to_string())
+    match normalized.split('/').last().map(|s| s.to_string()){
+        Some(x) => x,
+        None => String::new()
+    }
 }
 
 pub fn export_json_metadata(pdf_metadata : &PDFStruct){
@@ -67,7 +100,7 @@ pub fn export_json_metadata(pdf_metadata : &PDFStruct){
         "ISSN": "N/A",
         "URL": "N/A",
         "Title Confidence": "N/A",
-        "PDF Name": split_name(pdf_metadata.path.clone()),
+        "PDF Name": split_name(&pdf_metadata.path),
     });
 
     // Print JSON to console in a readable format

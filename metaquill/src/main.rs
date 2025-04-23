@@ -1,8 +1,9 @@
 #![allow(dead_code, unused)]
-use std::env;
+use std::{env, slice::RSplit};
 use std::path::Path;
-use document::read_pdf_dir;
-use file_manager::{close_file, create_file};
+use call::Metadata;
+use document::{read_pdf_dir, PdfResult};
+use file_manager::{close_file, create_file, export_csv};
 mod metadata;
 mod call;
 mod file_manager;
@@ -16,10 +17,8 @@ fn main() {
         return;
     }
 
-    // // Create ouputfile
-    create_file();
-    // // Load the PDF file
-    read_pdf_dir(Path::new(&args[1]));
-    // // End json output
-    close_file();
+    let mut result = PdfResult{pdfs : Vec::new(), read : 0, fails : 0};
+    read_pdf_dir(Path::new(&args[1]), &mut result);
+    println!("Tried to read {} files, {} failed", result.read, result.fails);
+    export_csv(&mut result.pdfs);
 }

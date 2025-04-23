@@ -9,7 +9,7 @@ use tokio::time::timeout;
 use strsim::levenshtein; // Comparing two string
 
 // Struct to collect all metadata
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Metadata {
     pub title: String,
     pub doi: String,
@@ -24,6 +24,7 @@ pub struct Metadata {
     pub issn: String,
     pub url: String,
     pub title_confidence: f64,
+    pub file_path : String,
 }
 
 /// Extracts a string field from JSON safely
@@ -163,7 +164,7 @@ pub async fn call(pdf_metadata: &PDFStruct) -> Result<Option<Metadata>, Box<dyn 
         };
     
         // Print URL for requset (Can be removed if print not wanted)
-        println!("🔍 API Request URL: {}", request_url);
+        // println!("🔍 API Request URL: {}", request_url);
     
         let json = fetch_with_retry(&request_url).await?;
     
@@ -216,6 +217,7 @@ pub async fn call(pdf_metadata: &PDFStruct) -> Result<Option<Metadata>, Box<dyn 
                     issn: extract_array_str(work, "ISSN"),
                     url: extract_str(work, "URL"),
                     title_confidence: title_confidence,
+                    file_path : pdf_metadata.path.clone(),
                 };
     
                 metadata_list.push(metadata);
