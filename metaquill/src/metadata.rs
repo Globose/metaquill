@@ -113,28 +113,31 @@ pub fn get_probable_title(pdf : &mut document::Document) -> String{
     if texts.len() == 0{
         return String::new();
     }
+    
     // for t in &texts {
     //     println!("---");
     //     println!("{}", t.chars);
     //     println!("{}", t.scaled_font_size);
+    //     println!("{}", t.avg_font_size);
+    //     println!("{}", t.pos_y);
     // }
-    
+
     // Keep all texts that can be accepted as a title
-    texts.retain(|txt| txt.scaled_font_size > 5.0);
+    texts.retain(|txt| txt.avg_font_size > 5.0);
+    // texts.retain(|txt| txt.pos_y > 400.0); // Test this
     texts.retain(|txt| is_accepted_title(&txt.chars));
     
     // Find the largest text size
     let mut max : f64 = 0.0;
     for txt in &texts {
-        if txt.scaled_font_size > max {
-            max = txt.scaled_font_size;
+        if txt.avg_font_size > max {
+            max = txt.avg_font_size;
         }
     }
-    let max_lim = max * 0.95;
+    let max_lim = max * 0.9;
     
     // Remove everything smaller than 85% of the max text size
-    texts.retain(|txt| txt.scaled_font_size > max_lim || txt.scaled_font_size > 13.0);
-    
+    texts.retain(|txt| txt.avg_font_size > max_lim || txt.avg_font_size > 13.0);
     
     // If the largest font is less than 11, return the first element
     if max < 11.0 {
@@ -145,8 +148,6 @@ pub fn get_probable_title(pdf : &mut document::Document) -> String{
             None => String::new()
         }
     }
-
-
 
     // Otherwise, return the longest element
     let Some(longest_text) = texts.iter().max_by_key(|txt| txt.chars.len()) else {
@@ -312,7 +313,7 @@ pub fn is_accepted_title(title : &str) -> bool{
     if title.len() < 16 || title.len() > 300 {
         return false;
     }
-
+    
     // Count each category of characters
     let mut letters = 0.0;
     let mut numbers = 0.0;
@@ -325,19 +326,19 @@ pub fn is_accepted_title(title : &str) -> bool{
         else if t.is_ascii_digit() {
             numbers += 1.0;
         }
-        else if t == ' '{
+        else if t.is_whitespace(){
             spaces += 1.0;
         }
         else{
             others += 1.0;
         }
     }
-
+    
     // A title has to contain at least one space
     if spaces < 1.0{
         return false;
     }
-
+    
     let total_chars = letters + numbers + others;
     let avg_wlen = total_chars / spaces;
     
@@ -345,7 +346,7 @@ pub fn is_accepted_title(title : &str) -> bool{
     if avg_wlen > 14.0{
         return false;
     }
-
+    
     // Number of non-space chars has to be greater than 14
     if total_chars < 14.0{
         return false;
@@ -353,7 +354,7 @@ pub fn is_accepted_title(title : &str) -> bool{
     
     let _o_oth = others/total_chars;
     let o_let = letters/total_chars;
-
+    
     // Non-alphabetic chars musn't make up more than 30% of the title
     if o_let < 0.7{
         return false;

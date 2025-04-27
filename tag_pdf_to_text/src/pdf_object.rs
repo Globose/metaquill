@@ -366,7 +366,15 @@ fn obj_parse_hex_string(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result
     let mut hex_vector : Vec<u32> = Vec::new();
     doc.it += 1;
 
+    if doc.it >= doc.size(){
+        return Err(PdfError::DocumentError);
+    }
+    
     while doc.byte().is_ascii_alphanumeric() {
+        if doc.it + 1 >= doc.size(){
+            return Err(PdfError::DocumentError);
+        }
+
         let mut chars : Vec<u8> = vec![doc.byte(), doc.data[doc.it+1]];
 
         // If last char is not included, it is assumed to be 0
@@ -379,6 +387,10 @@ fn obj_parse_hex_string(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result
         hex_vector.push(number as u32);
         doc.it += 2;
     }
+    if doc.it >= doc.size(){
+        return Err(PdfError::DocumentError);
+    }
+    // Check for correct ending
     if doc.byte() != b'>' {
         return Err(PdfError::HexError);
     }
@@ -393,6 +405,11 @@ fn obj_parse_name(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result<(), P
     doc.it += 1;
 
     loop {
+        // Within bounds
+        if doc.it + 2 >= doc.size(){
+            return Err(PdfError::DocumentError);
+        }
+
         if doc.byte() == b'#'{
             // Convert to hex
             let nums = vec![doc.data[doc.it+1], doc.data[doc.it+2]];
@@ -414,13 +431,18 @@ fn obj_parse_name(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result<(), P
 }
 
 /// Parses a numeric object
-fn obj_parse_numeric(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result<(), PdfError>{
+pub(crate) fn obj_parse_numeric(doc : &mut Document, stack : &mut Vec<PdfVar>) -> Result<(), PdfError>{
     let signed = doc.byte() == b'+' || doc.byte() == b'-';
     let mut number_str = String::new();
     
     while doc.byte().is_ascii_digit() || matches!(doc.data[doc.it], b'+' | b'-' | b'.') {
         number_str.push(doc.byte() as char);
         doc.it += 1;
+
+        // Within bounds
+        if doc.it >= doc.size(){
+            return Err(PdfError::DocumentError);
+        }
     }
     
     // Attempts to convert to int, if fails try float, if fail return None

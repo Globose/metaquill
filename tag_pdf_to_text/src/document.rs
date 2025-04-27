@@ -60,7 +60,7 @@ impl Document {
         
         // Get Page Fonts
         let fonts = get_page_resources(self, &page_object);
-
+        
         // Get ids of content
         // If contents is non-existent page is empty
         let Some(page_contents) = page_object.get_dict_value("Contents") else{

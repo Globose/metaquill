@@ -1,15 +1,30 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::vec;
-use crate::pdf_object::{cmp_u8, is_delimiter, parse_object, to_hex, PdfVar};
+use crate::pdf_object::{cmp_u8, is_delimiter, obj_parse_numeric, parse_object, to_hex, PdfVar};
 use crate::document::{Document, PdfError};
 use crate::decoding::decode_pdfdoc_char;
+use crate::print_raw;
 
 #[derive(Debug, Clone)]
 pub struct Text{
     pub pos_y : f64,
     pub scaled_font_size : f64,
     pub chars : String,
+    pub avg_font_size : f64,
     font : String,
+}
+
+impl Text {
+    // Adds a space, given that the last char is not a space
+    fn add_space(&mut self){
+        if let Some(c0) = self.chars.chars().last(){
+            if c0 == ' '{
+                return;
+            }
+        }
+        self.chars.push(' ');
+    }
 }
 
 #[derive(Debug)]
@@ -18,11 +33,13 @@ pub(crate) struct Font{
     mapping : HashMap<u32,Vec<u32>>,
 }
 
-#[derive(Debug)]
+// 9 Params for text state params (p. 243)
+#[derive(Debug, Clone)]
 pub(crate) struct TextReader {
-    stack : Vec<PdfVar>,
     y_pos : f64,
     scale : f64,
+    graph_scale : f64,
+    graph_y : f64,
     font_size : f64,
     scaled_font_size : f64,
     leading : f64,
@@ -367,44 +384,107 @@ pub(crate) fn read_objects_text(doc : &mut Document, obj_ids : Vec<usize>, fonts
     }
 
     doc.it = start;
+    // print_raw(&doc.data, doc.it, 100000);
 
     let mut text_objects : Vec<Text> = Vec::new();
-    let mut text: Text = Text{pos_y : -1.0, chars : String::new(), scaled_font_size : 0.0, font : String::new()};
+    let mut text: Text = Text{pos_y : -1.0, chars : String::new(), scaled_font_size : 0.0, font : String::new(), avg_font_size : 1.0};
     let mut text_reader = TextReader{
-        stack : Vec::new(), y_pos : 0.0, scale : 1.0, font_size : 1.0, scaled_font_size : 1.0, leading : 0.0
+        y_pos : 0.0, scale : 1.0, font_size : 1.0, scaled_font_size : 1.0, leading : 0.0, graph_scale : 1.0, graph_y : 0.0
     };
+    let mut text_reader_stack : Vec<TextReader> = Vec::new();
+    text_reader_stack.push(text_reader);
 
     while doc.it < doc.size() {
         // Find BT section
-        while doc.it < doc.size() {
-            if doc.byte() != b'B' {
-                doc.it += 1;
-                continue;
-            }
-            if cmp_u8(&doc.data, doc.it, b"BT"){
-                doc.it += 2;
-                break;
-            }
-            while !is_delimiter(&doc.data, doc.it){
-                doc.it += 1;
-            }
-        }
+        parse_page_content(doc, &mut text_reader_stack);
 
         if doc.it >= doc.size(){
             break;
         }
-        parse_text_section(doc, &mut text_objects, &mut text, &fonts, &mut text_reader)?;
+        
+        // BT section starts here
+        let Some(top_graph_state) = text_reader_stack.last_mut() else {
+            return None;
+        };
+        parse_text_section(doc, &mut text_objects, &mut text, &fonts, top_graph_state)?;
     }
-    
     add_text_section(&mut text, &mut text_objects, 0.0, 0.0);
     Some(text_objects)
+}
+
+/// Parses the Non-text parts of a page
+fn parse_page_content(doc : &mut Document, text_reader_stack : &mut Vec<TextReader>){
+    let mut stack : Vec<PdfVar> = Vec::new();
+
+    while doc.it < doc.size() {
+        match doc.byte() {
+            b'B' => {
+                if cmp_u8(&doc.data, doc.it, b"BT"){
+                    doc.it += 2;
+                    return;
+                }
+            }
+            (48..58) | b'+' | b'-' | b'.' => {
+                obj_parse_numeric(doc, &mut stack);
+                doc.it += 1;
+                continue;
+            }
+            b'q' => {
+                if let Some(top) = text_reader_stack.last(){
+                    let copy = top.clone();
+                    text_reader_stack.push(copy);
+                }
+            }
+            b'Q' => {
+                text_reader_stack.pop();
+            }
+            b'c' => {
+                if cmp_u8(&doc.data, doc.it, b"cm"){
+                    graph_cm(text_reader_stack, &stack);
+                    doc.it += 1;
+                }
+            }
+            _ => {
+            }
+        }
+        doc.it += 1;
+        stack.clear();
+    }
+}
+
+fn graph_cm(text_reader_stack : &mut Vec<TextReader>, stack : &Vec<PdfVar>) -> Option<()>{
+    let Some(ty_obj) = stack.get(5) else{
+        return None;
+    };
+    let Some(scale_obj) = stack.get(0) else{
+        return None;
+    };
+
+    // Get values
+    let Some(ty) = ty_obj.get_f64() else{
+        return None;
+    };
+    let Some(new_scale) = scale_obj.get_f64() else{
+        return None;
+    };
+
+    if let Some(tr) = text_reader_stack.last_mut() {
+        tr.graph_scale *= new_scale;
+        tr.graph_y += ty;
+        return Some(());
+    }
+    return None;
 }
 
 /// Parses a BT section reading all text elements
 fn parse_text_section(doc : &mut Document, text_objects : &mut Vec<Text>, text : &mut Text, fonts : &Vec<Font>, tr : &mut TextReader) -> Option<()>{    
     tr.scale = 1.0;
     tr.y_pos = 0.0;
+    tr.leading = 0.0;
     tr.scaled_font_size = tr.font_size;
+    
+    let mut stack : Vec<PdfVar> = Vec::new();
+
     loop {
         doc.skip_whitespace();
         match doc.byte() {
@@ -412,29 +492,29 @@ fn parse_text_section(doc : &mut Document, text_objects : &mut Vec<Text>, text :
                 doc.it += 1;
                 match doc.byte() {
                     b'f' => {
-                        text_tf(tr,text)?;
+                        text_tf(tr,text, &stack)?;
                     }
                     b'J' => {
-                        text_tj_array(tr, text, text_objects, fonts)?;
+                        text_tj_array(tr, text, text_objects, fonts, &stack)?;
                     }
                     b'm' => {
-                        text_tm(tr)?;
+                        text_tm(tr, text, &stack)?;
                     }
                     b'd' => {
-                        text_td(tr, text)?;
+                        text_td(tr, text, &stack)?;
                     }
                     b'D' => {
-                        text_tl(tr, true)?;
-                        text_td(tr, text)?;
+                        text_tl(tr, true, &stack)?;
+                        text_td(tr, text, &stack)?;
                     }
                     b'*' => {
                         text_asterisk(tr)?;
                     }
                     b'L' => {
-                        text_tl(tr, false)?;
+                        text_tl(tr, false, &stack)?;
                     }
                     b'j' => {
-                        text_tj(tr, text, text_objects, fonts)?;
+                        text_tj(tr, text, text_objects, fonts, &stack)?;
                     }
                     b'c' | b'w' | b'z' | b'r' | b's' => {
                         // Ignore
@@ -444,13 +524,12 @@ fn parse_text_section(doc : &mut Document, text_objects : &mut Vec<Text>, text :
                     }
                 }
                 doc.it +=1;
-                
-                tr.stack.clear();
+                stack.clear();
             }
             b'\'' => {
                 text_asterisk(tr);
-                text_tj(tr, text, text_objects, fonts)?;
-                tr.stack.clear();
+                text_tj(tr, text, text_objects, fonts, &stack)?;
+                stack.clear();
                 doc.it += 1;
             }
             b'"' => {
@@ -464,15 +543,15 @@ fn parse_text_section(doc : &mut Document, text_objects : &mut Vec<Text>, text :
                 }
                 else{
                     read_text(doc);
-                    tr.stack.clear();
+                    stack.clear();
                 }
             }
             _ => {
-                if let Err(e) = parse_object(doc, &mut tr.stack){
+                if let Err(e) = parse_object(doc, &mut stack){
                     match e {
                         PdfError::UnmatchedChar => {
                             read_text(doc);
-                            tr.stack.clear();
+                            stack.clear();
                             doc.it += 1;
                         }
                         _ => {
@@ -487,33 +566,33 @@ fn parse_text_section(doc : &mut Document, text_objects : &mut Vec<Text>, text :
 }
 
 /// Handles Tj
-fn text_tj(tr : &mut TextReader, text : &mut Text, text_objects : &mut Vec<Text>, fonts : &Vec<Font>) -> Option<()>{
-    let Some(str_obj) = tr.stack.get(0) else{
+fn text_tj(tr : &mut TextReader, text : &mut Text, text_objects : &mut Vec<Text>, fonts : &Vec<Font>, stack : &Vec<PdfVar>) -> Option<()>{
+    let Some(str_obj) = stack.get(0) else{
         return None;
     };
     
-    eval_text_section(text, text_objects, tr.y_pos, tr.scaled_font_size);
+    eval_text_section(text, text_objects, tr.y_pos+tr.graph_y, tr.scaled_font_size);
 
     // Add text
     let PdfVar::StringLiteral(string_lit) = str_obj else{
         return None;
     };
-    add_str_lit(text, string_lit, fonts);
+    add_str_lit(text, tr, string_lit, fonts);
     Some(())
 }
 
 /// Handles T*
 fn text_asterisk(tr : &mut TextReader) -> Option<()>{
-    tr.y_pos += -tr.leading*tr.scale;
+    tr.y_pos += -tr.leading*tr.scale*tr.graph_scale;
     Some(())
 }
 
 /// Handles Td
-fn text_td(tr : &mut TextReader, text : &mut Text) -> Option<()>{
-    let Some(tx_obj) = tr.stack.get(0) else {
+fn text_td(tr : &mut TextReader, text : &mut Text, stack : &Vec<PdfVar>) -> Option<()>{
+    let Some(tx_obj) = stack.get(0) else {
         return None;
     };
-    let Some(ty_obj) = tr.stack.get(1) else {
+    let Some(ty_obj) = stack.get(1) else {
         return None;
     };
     let Some(tx) = tx_obj.get_f64() else {
@@ -524,25 +603,31 @@ fn text_td(tr : &mut TextReader, text : &mut Text) -> Option<()>{
     };
 
     // If x-move is large, we have a space
-    if tx > 150.0{
-        text.chars.push(' ');
+    if tx*tr.graph_scale > 160.0{
+        text.add_space();
     }
 
     // Set new value for y-pos, if it is a new BT section position is reset to 0 and then updated
-    tr.y_pos = tr.y_pos + ty * tr.scale;
+    tr.y_pos = tr.y_pos + ty * tr.scale * tr.graph_scale;
     Some(())
 }
 
 /// Handles Tm
-fn text_tm(tr : &mut TextReader) -> Option<()>{
-    let Some(ty_obj) = tr.stack.get(5) else{
+fn text_tm(tr : &mut TextReader, text : &mut Text, stack : &Vec<PdfVar>) -> Option<()>{
+    let Some(ty_obj) = stack.get(5) else{
         return None;
     };
-    let Some(scale_obj) = tr.stack.get(0) else{
+    let Some(scale_obj) = stack.get(0) else{
+        return None;
+    };
+    let Some(tx_obj) = stack.get(4) else{
         return None;
     };
 
     // Get values
+    let Some(tx) = tx_obj.get_f64() else{
+        return None;
+    };
     let Some(ty) = ty_obj.get_f64() else{
         return None;
     };
@@ -550,22 +635,25 @@ fn text_tm(tr : &mut TextReader) -> Option<()>{
         return None;
     };
 
+    if tx > 0.0 {
+        text.add_space();
+    }
     
     tr.scale = new_scale;
     tr.y_pos = ty;
-    tr.scaled_font_size = tr.font_size*tr.scale;
+    tr.scaled_font_size = tr.font_size*tr.scale*tr.graph_scale;
     Some(())
 }
 
 /// Handles TL
-fn text_tl(tr : &mut TextReader, inverse : bool) -> Option<()>{
+fn text_tl(tr : &mut TextReader, inverse : bool, stack : &Vec<PdfVar>) -> Option<()>{
     let mut index = 0;
     let mut factor = 1.0;
     if inverse {
         index = 1;
         factor = -1.0;
     }
-    let Some(l_obj) = tr.stack.get(index) else{
+    let Some(l_obj) = stack.get(index) else{
         return None;
     };
     let Some(lf) = l_obj.get_f64() else{
@@ -576,14 +664,14 @@ fn text_tl(tr : &mut TextReader, inverse : bool) -> Option<()>{
 }
 
 /// Handles Tf
-fn text_tf(tr : &mut TextReader, text : &mut Text) -> Option<()>{
-    let Some(font_name_obj) = tr.stack.get(0) else{
+fn text_tf(tr : &mut TextReader, text : &mut Text, stack : &Vec<PdfVar>) -> Option<()>{
+    let Some(font_name_obj) = stack.get(0) else{
         return None;
     };
     let Some(font_name) = font_name_obj.get_name() else{
         return None;
     };
-    let Some(font_size_obj) = tr.stack.get(1) else {
+    let Some(font_size_obj) = stack.get(1) else {
         return None;
     };
     let Some(font_size_tmp) = font_size_obj.get_f64() else{
@@ -592,31 +680,31 @@ fn text_tf(tr : &mut TextReader, text : &mut Text) -> Option<()>{
 
     text.font = font_name;
     tr.font_size = font_size_tmp;
-    tr.scaled_font_size = tr.font_size*tr.scale;
+    tr.scaled_font_size = tr.font_size*tr.scale*tr.graph_scale;
     Some(())
 }
 
 /// Handle TJ
-fn text_tj_array(tr : &mut TextReader, text : &mut Text, text_objects : &mut Vec<Text>, fonts : &Vec<Font>) -> Option<()>{
-    let Some(tj_obj) = tr.stack.get(0) else{
+fn text_tj_array(tr : &mut TextReader, text : &mut Text, text_objects : &mut Vec<Text>, fonts : &Vec<Font>, stack : &Vec<PdfVar>) -> Option<()>{
+    let Some(tj_obj) = stack.get(0) else{
         return None;
     };
     let PdfVar::Array(tj_array) = tj_obj else{
         return None;
     };
 
-    eval_text_section(text, text_objects, tr.y_pos, tr.scaled_font_size);
+    eval_text_section(text, text_objects, tr.y_pos+tr.graph_y, tr.scaled_font_size);
 
     // Add the text to the text section
     for pdfvar in tj_array{
         if let Some(num) = pdfvar.get_f64(){
             if num < -165.0 {
-                text.chars.push(' ');
+                text.add_space();
             }
             continue;
         }
         if let PdfVar::StringLiteral(string_lit) = pdfvar {
-            add_str_lit(text, string_lit, fonts);
+            add_str_lit(text, tr, string_lit, fonts);
             continue;
         }
         return None;
@@ -624,7 +712,7 @@ fn text_tj_array(tr : &mut TextReader, text : &mut Text, text_objects : &mut Vec
     Some(())
 }
 
-fn add_str_lit(text : &mut Text, string_lit : &Vec<u32>, fonts : &Vec<Font>){
+fn add_str_lit(text : &mut Text, tr : &TextReader, string_lit : &Vec<u32>, fonts : &Vec<Font>){
     // Fetch font
     let mut font : &Font = &fonts[0];
     for f in fonts{
@@ -633,13 +721,16 @@ fn add_str_lit(text : &mut Text, string_lit : &Vec<u32>, fonts : &Vec<Font>){
             break;
         }
     }
+
     let mut s = String::new();
+    let pre_size = text.chars.len() as f64;
+    let mut sum = pre_size*text.avg_font_size;
+
     // Iterate over all chars
     for key in string_lit{
         if *key == 0{
             continue;
         }
-        
         let Some(x_vec) = font.mapping.get(key) else {
             text.chars.push_str(decode_pdfdoc_char(*key).as_str());
             s.push_str(decode_pdfdoc_char(*key).as_str());
@@ -653,6 +744,13 @@ fn add_str_lit(text : &mut Text, string_lit : &Vec<u32>, fonts : &Vec<Font>){
             text.chars.push(uc);
         }
     }
+    // !("s {}, {}",s, text.pos_y);
+    // Update average font size
+    if text.chars.len() > 0 {
+        let post_size = text.chars.len() as f64;
+        sum += (post_size-pre_size)*tr.scaled_font_size;
+        text.avg_font_size = sum/post_size;
+    }
 }
 
 /// Evaluates if a new text segment belongs to the current text section, creates a new text section otherwise
@@ -663,29 +761,33 @@ fn eval_text_section(text : &mut Text, text_objects : &mut Vec<Text>, y_pos : f6
     if diff > 3.0*text.scaled_font_size {
         // New Text section
         add_text_section(text, text_objects, y_pos, scaled_font_size);
-    } else if diff > 0.7*text.scaled_font_size {
+    } else if diff > 0.7*scaled_font_size {
         // New row, look if fontsize has changed
         if (text.scaled_font_size-scaled_font_size).abs() > 0.2{
             add_text_section(text, text_objects, y_pos, scaled_font_size);
         }
         else{
             // Update the y-value of the text segment
-            text.chars.push(' ');
+            text.add_space();
             text.pos_y = y_pos;
         }
     }
+    text.scaled_font_size = scaled_font_size;
 }
 
+/// Saves the previous text section, creates a new text section to write to
 fn add_text_section(text : &mut Text, text_objects : &mut Vec<Text>, y_pos : f64, scaled_font_size : f64){
     // New text section
     if text.chars.len() > 0{
         // Save previous text segment when new is found
-        let text_obj = Text{pos_y : text.pos_y, scaled_font_size : text.scaled_font_size, chars : text.chars.clone(), font : String::new()};
-        text_objects.push(text_obj);
+        let mut copy = text.clone();
+        copy.font = String::new();
+        text_objects.push(copy);
         text.chars.clear();
     }
     text.pos_y = y_pos;
     text.scaled_font_size = scaled_font_size;
+    text.avg_font_size = 0.0;
 }
 
 /// Reads all ascii chars until something else

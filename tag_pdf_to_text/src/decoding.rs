@@ -109,7 +109,6 @@ pub(crate) fn decode_flate(data : &mut Vec<u8>) -> Result<(), PdfError>{
     match decoder.read_to_end(data){
         Ok(_) => Ok(()),
         Err(e) => {
-            println!("Failed to decompress zlib: {}", e);
             Err(PdfError::DecodeError)
         }
     }
