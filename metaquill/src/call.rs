@@ -1,16 +1,15 @@
 use reqwest::Client;
 use serde_json::Value;
-use crate::metadata::PDFStruct;
+use crate::{metadata::PdfStruct, PdfData};
 use std::error::Error;
 use urlencoding::encode; // Import URL encoding
 use std::time::Duration;
 use tokio::time::timeout;
-
 use strsim::levenshtein; // Comparing two string
 
 // Struct to collect all metadata
-#[derive(Clone)]
-pub struct Metadata {
+#[derive(Clone, Debug)]
+pub struct PdfMetadata {
     pub title: String,
     pub doi: String,
     pub score: f64,
@@ -122,19 +121,22 @@ pub async fn fetch_with_retry(request_url: &str) -> Result<Value, Box<dyn std::e
     Err("Request failed after retry".into())
 }
 
-
-pub async fn call(pdf_metadata: &PDFStruct) -> Result<Option<Metadata>, Box<dyn Error>>  {
+/// Makes an API call
+pub async fn call(pdf_metadata: &PdfStruct, pdf_data : &PdfData) -> Result<Option<PdfMetadata>, Box<dyn Error>>  {
     // Add correct titles to list
     let mut titles : Vec<String> = Vec::new();
     if !pdf_metadata.metadata_title.is_empty(){
         titles.push(pdf_metadata.metadata_title.to_string());
     }
     if !pdf_metadata.assumed_title.is_empty(){
-        titles.push(pdf_metadata.assumed_title.to_string());
+        // If assumed title and metadata title differs more than slightly, a search is made for both
+        if compare_results(&pdf_metadata.metadata_title, &pdf_metadata.assumed_title) < 0.8 {
+            titles.push(pdf_metadata.assumed_title.to_string());
+        }
     }
     
     // to store top result
-    let mut top_result : Option<Metadata> = None;
+    let mut top_result : Option<PdfMetadata> = None;
 
     for title in titles{
         // Extarct title and encode title
@@ -163,7 +165,9 @@ pub async fn call(pdf_metadata: &PDFStruct) -> Result<Option<Metadata>, Box<dyn 
         };
     
         // Print URL for requset (Can be removed if print not wanted)
-        println!("🔍 API Request URL: {}", request_url);
+        if pdf_data.print_api_url {
+            println!("🔍 API Request URL: {}", request_url);
+        }
     
         let json = fetch_with_retry(&request_url).await?;
     
@@ -186,13 +190,8 @@ pub async fn call(pdf_metadata: &PDFStruct) -> Result<Option<Metadata>, Box<dyn 
             for work in items {
                 let result_title = extract_array_str(work, "title");
                 let title_confidence = compare_results(&result_title, title_raw);
-        
-                // Prints that can be used to easy compare tittles
-                // println!("Found Title: {}. With: {}", result_title, title_raw);
-                // println!("Title Confidence: {:.2}%", title_confidence);
-                // println!("------------------------------");
     
-                let metadata = Metadata {
+                let metadata = PdfMetadata {
                     title: result_title,
                     doi: extract_str(work, "DOI"),
                     score: work["score"].as_f64().unwrap_or(0.0),

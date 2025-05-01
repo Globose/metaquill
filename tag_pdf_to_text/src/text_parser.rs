@@ -758,7 +758,7 @@ fn eval_text_section(text : &mut Text, text_objects : &mut Vec<Text>, y_pos : f6
     // Compare y-position of last text to the new one
     let diff = (text.pos_y-y_pos).abs();
 
-    if diff > 3.0*text.scaled_font_size {
+    if diff > 2.0*text.scaled_font_size {
         // New Text section
         add_text_section(text, text_objects, y_pos, scaled_font_size);
     } else if diff > 0.7*scaled_font_size {

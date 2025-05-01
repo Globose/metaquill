@@ -3,6 +3,8 @@ use regex::Regex;
 use encoding_rs::WINDOWS_1252;
 use tag_pdf_to_text::document;
 
+use crate::{call::PdfMetadata, file_manager::split_name};
+
 struct TextObject{
     font_size: f32,
     text: String,
@@ -10,11 +12,13 @@ struct TextObject{
 
 /// Save the PDF information
 #[derive(Debug)]
-pub struct PDFStruct {
+pub struct PdfStruct {
     pub path: String,
+    pub filename : String,
     pub metadata_title: String,
     pub assumed_title: String,
     pub author: Vec<String>,
+    pub api_metadata : Option<PdfMetadata>,
 }
 
 pub fn decode_bytes(bytes: &[u8]) -> String {
@@ -28,47 +32,62 @@ pub fn decode_bytes(bytes: &[u8]) -> String {
 }
 
 /// Returns the metadata for a given PDF document
-pub fn fetch_metadata(document : &Document, filepath : &str) -> PDFStruct{
+pub fn fetch_metadata(document : &Document, filepath : &str) -> PdfStruct{
     // Create a struct for metadata
-    let mut metadata = PDFStruct {
+    let mut pdf_obj = PdfStruct {
         path: filepath.to_string(),
         metadata_title: String::new(),
+        filename: String::new(),
         assumed_title: String::new(),
         author: Vec::new(),
+        api_metadata : None,
     };
     
     // Extract metadata from the file header
-    collect_title_and_author(&document, &mut metadata);
-    
-    // Read assumed title
-    metadata.assumed_title = text_to_metadata(&document);
+    collect_title_and_author(&document, &mut pdf_obj);
 
-    return metadata;
+    // Remove title if it is not a title
+    if !is_accepted_title(&pdf_obj.metadata_title){
+        pdf_obj.metadata_title = String::new();
+    }
+
+    // Read assumed title
+    pdf_obj.assumed_title = text_to_metadata(&document);
+
+    return pdf_obj;
 }
 
 /// Returns the metadata for a given PDF document
-pub fn extract_metadata(pdf : &mut document::Document, filepath : &str) -> PDFStruct{
+pub fn extract_metadata(pdf : &mut document::Document, filepath : &str) -> PdfStruct{
     let mut meta_title = String::new();
     let mut meta_authors : Vec<String> = Vec::new();
 
-    // Get title
+    // Get title from Info object
     if let Some(title) = pdf.get_info("Title"){
         meta_title = title;
     };
 
-    // Get title from text
-    let assumed_title = get_probable_title(pdf);
+    // If title is invalid, it is rejected
+    if !is_accepted_title(&meta_title){
+        meta_title = String::new();
+    }
     
     // Get authors
     if let Some(authors) = pdf.get_info("Author"){
         meta_authors = split_authors(&authors);
     };
+
+    // Get title from text
+    let assumed_title = get_probable_title(pdf);
+
+    // Get filename
+    let fname = split_name(filepath).unwrap_or(String::new());
     
-    PDFStruct{path : filepath.to_string(), metadata_title : meta_title, assumed_title : assumed_title, author : meta_authors}
+    PdfStruct{path : filepath.to_string(), metadata_title : meta_title, assumed_title : assumed_title, author : meta_authors, api_metadata : None, filename : fname}
 }
 
 /// Collects the Title and Author from the PDF's trailer "Info" dictionary.
-fn collect_title_and_author(document: &Document, metadata: &mut PDFStruct) {
+fn collect_title_and_author(document: &Document, metadata: &mut PdfStruct) {
     // Get the "Info" entry from the trailer, if available.
     if let Ok(Some(Object::Dictionary(dict))) = document.trailer.get(b"Info").map(|obj| match obj {
         Object::Reference(id) => document.get_dictionary(*id).ok().map(|d| Object::Dictionary(d.clone())),
@@ -127,6 +146,7 @@ pub fn get_probable_title(pdf : &mut document::Document) -> String{
     // texts.retain(|txt| txt.pos_y > 400.0); // Test this
     texts.retain(|txt| is_accepted_title(&txt.chars));
     
+
     // Find the largest text size
     let mut max : f64 = 0.0;
     for txt in &texts {
@@ -137,7 +157,7 @@ pub fn get_probable_title(pdf : &mut document::Document) -> String{
     let max_lim = max * 0.9;
     
     // Remove everything smaller than 85% of the max text size
-    texts.retain(|txt| txt.avg_font_size > max_lim || txt.avg_font_size > 13.0);
+    texts.retain(|txt| txt.avg_font_size > max_lim); // || txt.avg_font_size > 13.0, test this
     
     // If the largest font is less than 11, return the first element
     if max < 11.0 {
@@ -296,13 +316,13 @@ pub fn text_to_metadata(doc: &Document) -> String{
             }
         }
     }
-    
+
+    text_objects.retain(|obj| is_accepted_title(&obj.text));
     text_objects.sort_by(|x,y| y.font_size.partial_cmp(&x.font_size).unwrap());
     text_objects.retain(|txt_obj| txt_obj.text.len() > 17);
     text_objects.retain(|obj| !obj.text.contains("Authorized licensed use limited to"));
     
     if let Some(first_obj) = text_objects.first() {
-        // println!("Assumed title: >{}<", first_obj.text);
         return first_obj.text.to_string();
     }
     return "".to_string();
@@ -343,7 +363,7 @@ pub fn is_accepted_title(title : &str) -> bool{
     let avg_wlen = total_chars / spaces;
     
     // Average word length has to be below 14
-    if avg_wlen > 14.0{
+    if avg_wlen > 14.0 ||avg_wlen < 3.0{
         return false;
     }
     
