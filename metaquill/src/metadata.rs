@@ -54,6 +54,10 @@ pub fn fetch_metadata(document : &Document, filepath : &str) -> PdfStruct{
     // Read assumed title
     pdf_obj.assumed_title = text_to_metadata(&document);
 
+    // Get filename
+    let fname = split_name(filepath).unwrap_or(String::new());
+    pdf_obj.filename = fname;
+
     return pdf_obj;
 }
 

@@ -16,7 +16,7 @@ pub struct PdfData {
     pub fails : u32,
     pub api_hits : u32,
     pub output_filepath : String,
-    pub reader : u8, // 1 = lopdf, 0 else
+    pub reader : u8, // 1 = lopdf, 0 standard
     pub print_info : bool,
     pub print_api_url : bool,
     pub make_api_call : bool,
@@ -35,10 +35,9 @@ fn main() {
         output_filepath : "output.json".to_string(), print_info: true, make_api_call : false,
         print_api_url: false, api_hits : 0};
 
-    // pdf_data.reader = 1;
     read_pdf_dir(Path::new(&args[1]), &mut pdf_data);
     println!("---");
-    println!("Tried to read {} files, {} failed", pdf_data.read, pdf_data.fails);
+    println!("Tried to read {} files, {} failed, {} api-hits", pdf_data.read, pdf_data.fails, pdf_data.api_hits);
     
     // Output result to a csv file
     if let Err(err) = export_csv(&mut pdf_data.pdfs){

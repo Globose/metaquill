@@ -146,7 +146,7 @@ fn lo_read_pdf(filepath: &str, pdf_data : &mut PdfData){
     match read_pdf_metadata(filepath) {
         Some(mut pdf_meta) => {
             if pdf_data.print_info {
-                println!("AssumedTitle = {}", pdf_meta.metadata_title);
+                println!("MetaTitle = {}", pdf_meta.metadata_title);
                 println!("AssumedTitle = {}", pdf_meta.assumed_title);
             }
 
