@@ -1,15 +1,80 @@
-use crate::metadata::PdfStruct;
-use crate::PdfData;
-use std::fs::File;
+use crate::{arg_parser::PdfData, metadata::PdfStruct};
+use std::fs::read_dir;
+use std::{fs::File, path::Path};
 use std::io::Write;
 use serde_json::{json, Value};
 use lopdf::{Document, Error as LoError};
 use std::error::Error;
 
 pub fn load_pdf(filepath : &str) -> Result<Document, LoError> {
-    // println!("Loading PDF {filepath}");
     let document = Document::load(filepath)?;
     return Ok(document);
+}
+
+// Returns a list of filepaths of all pdf documents in given directory
+// Use rec = true for search in subdirectories
+pub fn get_pdf_paths(filepath : &str, rec : bool) -> Option<Vec<String>> {
+    let mut pdf_paths : Vec<String> = Vec::new();
+    let path = Path::new(filepath);
+
+    if path.is_dir(){
+        // If path is a directory
+        read_directory(path, &mut pdf_paths, rec);
+    } else if path.is_file() {
+        // If path is a file
+        read_file_path(path, &mut pdf_paths);
+    } else {
+        println!("The file path has to be a valid pdf file or a directory");
+        return None;
+    }
+    return Some(pdf_paths);
+}
+
+// Reads all entries in a directory, adds pdf-files to pdf_paths vector
+fn read_directory(path : &Path, pdf_paths : &mut Vec<String>, rec : bool) -> Option<()>{
+    // Read all files in directory
+    let entries = match read_dir(path) {
+        Ok(x) => x,
+        Err(e) => {
+            println!("Failed to read directory {:?}: {}", path, e);
+            return None;
+        }
+    };
+
+    // Iterate over all directory entries
+    for entry_result in entries {
+        let Ok(entry) = entry_result else{
+            continue;
+        };
+        
+        let entry_path = entry.path();
+        if entry_path.is_dir() && rec {
+            // If entry is a directory, and recursive search is on
+            read_directory(&entry_path, pdf_paths, rec);
+        } else if entry_path.is_file(){
+            // If entry is a file
+            read_file_path(&entry_path, pdf_paths);
+        }
+    }
+    return Some(());
+}
+
+// Reads a file path. If it is a .pdf it will be added to pdf_paths
+fn read_file_path(path : &Path, pdf_paths : &mut Vec<String>){
+    // If path is a file
+    let Some(extension) = path.extension() else {
+        return;
+    };
+
+    // Only care when file extension is .pdf
+    if extension != "pdf" {
+        return;
+    }
+
+    let Some(pdfpath) = path.to_str() else {
+        return;
+    };
+    pdf_paths.push(pdfpath.to_string());
 }
 
 /// Export a list of read PDFs to a json file

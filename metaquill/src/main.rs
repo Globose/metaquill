@@ -1,51 +1,39 @@
 // #![allow(dead_code, unused)]
 use std::env;
-use std::path::Path;
+use arg_parser::parse_args;
 use document::read_pdf_dir;
-use file_manager::{export_csv, export_json};
-use metadata::PdfStruct;
+use file_manager::{export_csv, export_json, get_pdf_paths};
 mod metadata;
 mod call;
 mod file_manager;
 mod document;
-
-#[derive(Debug)]
-pub struct PdfData {
-    pub pdfs : Vec<PdfStruct>,
-    pub read : u32,
-    pub fails : u32,
-    pub api_hits : u32,
-    pub output_filepath : String,
-    pub reader : u8, // 1 = lopdf, 0 standard
-    pub print_info : bool,
-    pub print_api_url : bool,
-    pub make_api_call : bool,
-}
+mod arg_parser;
 
 fn main() {
+    // Parse Arguments
     let args: Vec<String> = env::args().collect();
-
-    if args.len() != 2 {
-        println!("Failed to read PDF: No PDF file provided");
+    let Some(mut pdf_data) = parse_args(&args) else {
         return;
-    }
+    };
 
-    // PDF reading settings
-    let mut pdf_data = PdfData{pdfs : Vec::new(), read : 0, fails : 0, reader : 0, 
-        output_filepath : "output.json".to_string(), print_info: true, make_api_call : false,
-        print_api_url: false, api_hits : 0};
+    // Get all pdf:s in path
+    let Some(pdf_paths) = get_pdf_paths(&pdf_data.path, pdf_data.recursive) else {
+        return;
+    };
 
-    read_pdf_dir(Path::new(&args[1]), &mut pdf_data);
+    println!("Attempting to read {} pdf documents", pdf_paths.len());
+    read_pdf_dir(&pdf_paths, &mut pdf_data);
+    
     println!("---");
     println!("Tried to read {} files, {} failed, {} api-hits", pdf_data.read, pdf_data.fails, pdf_data.api_hits);
     
-    // Output result to a csv file
-    if let Err(err) = export_csv(&mut pdf_data.pdfs){
-        println!("Error: {}", err);
-    };
-    
     // Output result to a json file
     if let Err(err) = export_json(&mut pdf_data){
+        println!("{}", err);
+    };
+    
+    // Output result to a csv file
+    if let Err(err) = export_csv(&mut pdf_data.pdfs){
         println!("{}", err);
     };
 }

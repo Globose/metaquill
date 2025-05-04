@@ -1,6 +1,6 @@
 use reqwest::Client;
 use serde_json::Value;
-use crate::{metadata::PdfStruct, PdfData};
+use crate::{arg_parser::{Mode, PdfData}, metadata::PdfStruct};
 use std::error::Error;
 use urlencoding::encode; // Import URL encoding
 use std::time::Duration;
@@ -130,7 +130,7 @@ pub async fn call(pdf_metadata: &PdfStruct, pdf_data : &PdfData) -> Result<Optio
     }
     if !pdf_metadata.assumed_title.is_empty(){
         // If assumed title and metadata title differs more than slightly, a search is made for both
-        if compare_results(&pdf_metadata.metadata_title, &pdf_metadata.assumed_title) < 0.8 {
+        if compare_results(&pdf_metadata.metadata_title, &pdf_metadata.assumed_title) < 80.0 {
             titles.push(pdf_metadata.assumed_title.to_string());
         }
     }
@@ -143,29 +143,30 @@ pub async fn call(pdf_metadata: &PdfStruct, pdf_data : &PdfData) -> Result<Optio
         let title_raw = title.trim();
         let title_query = encode(&title.trim());
         
-        let binding = "".to_string();
+        // let binding = "".to_string();
         // Collect first author or set it to empry string if empty
-        let author_raw = pdf_metadata.author.get(0).unwrap_or(&binding).trim();
+        // let author_raw = pdf_metadata.author.get(0).unwrap_or(&binding).trim();
     
         // Only encode author_raw if it is not "N/A" or empty
-        let author_query = if author_raw == "N/A" || author_raw.is_empty() {
-            "".to_string()
-        } else {
-            encode(author_raw).into_owned()
-        };
+        // let author_query = if author_raw == "N/A" || author_raw.is_empty() {
+        //     "".to_string()
+        // } else {
+        //     encode(author_raw).into_owned()
+        // };
 
-        // Construct the request URL
-        let request_url = if author_query.is_empty() {
-            format!("https://api.crossref.org/works?query.bibliographic={}", title_query)
-        } else {
-            format!(
-                "https://api.crossref.org/works?query.bibliographic={}&query.author={}",
-                title_query, author_query
-            )
-        };
-    
+        // // Construct the request URL
+        // let request_url = if author_query.is_empty() {
+        //     format!("https://api.crossref.org/works?query.bibliographic={}", title_query)
+        // } else {
+        //     format!(
+        //         "https://api.crossref.org/works?query.bibliographic={}&query.author={}",
+        //         title_query, author_query
+        //     )
+        // };
+        let request_url = format!("https://api.crossref.org/works?query.bibliographic={}", title_query);
+        
         // Print URL for requset (Can be removed if print not wanted)
-        if pdf_data.print_api_url {
+        if pdf_data.mode == Mode::Full {
             println!("🔍 API Request URL: {}", request_url);
         }
     

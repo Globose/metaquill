@@ -781,6 +781,7 @@ fn add_text_section(text : &mut Text, text_objects : &mut Vec<Text>, y_pos : f64
     if text.chars.len() > 0{
         // Save previous text segment when new is found
         let mut copy = text.clone();
+        copy.chars = copy.chars.trim().to_string();
         copy.font = String::new();
         text_objects.push(copy);
         text.chars.clear();

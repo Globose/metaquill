@@ -13,7 +13,7 @@ struct TextObject{
 /// Save the PDF information
 #[derive(Debug)]
 pub struct PdfStruct {
-    pub path: String,
+    pub _path: String,
     pub filename : String,
     pub metadata_title: String,
     pub assumed_title: String,
@@ -35,7 +35,7 @@ pub fn decode_bytes(bytes: &[u8]) -> String {
 pub fn fetch_metadata(document : &Document, filepath : &str) -> PdfStruct{
     // Create a struct for metadata
     let mut pdf_obj = PdfStruct {
-        path: filepath.to_string(),
+        _path: filepath.to_string(),
         metadata_title: String::new(),
         filename: String::new(),
         assumed_title: String::new(),
@@ -87,7 +87,7 @@ pub fn extract_metadata(pdf : &mut document::Document, filepath : &str) -> PdfSt
     // Get filename
     let fname = split_name(filepath).unwrap_or(String::new());
     
-    PdfStruct{path : filepath.to_string(), metadata_title : meta_title, assumed_title : assumed_title, author : meta_authors, api_metadata : None, filename : fname}
+    PdfStruct{_path : filepath.to_string(), metadata_title : meta_title, assumed_title : assumed_title, author : meta_authors, api_metadata : None, filename : fname}
 }
 
 /// Collects the Title and Author from the PDF's trailer "Info" dictionary.
