@@ -849,11 +849,13 @@ version = "0.1.0"
 dependencies = [
  "encoding_rs",
  "lopdf",
+ "natord",
  "regex",
  "reqwest",
  "serde",
  "serde_json",
  "strsim",
+ "tag_pdf_to_text",
  "tokio",
  "urlencoding",
 ]
@@ -906,6 +908,12 @@ dependencies = [
  "security-framework-sys",
  "tempfile",
 ]
+
+[[package]]
+name = "natord"
+version = "1.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "308d96db8debc727c3fd9744aac51751243420e46edf401010908da7f8d5e57c"
 
 [[package]]
 name = "nom"
@@ -1461,6 +1469,13 @@ checksum = "8e1d1b10ced5ca923a1fcb8d03e96b8d3268065d724548c0211415ff6ac6bac4"
 dependencies = [
  "core-foundation-sys",
  "libc",
+]
+
+[[package]]
+name = "tag_pdf_to_text"
+version = "0.1.0"
+dependencies = [
+ "flate2",
 ]
 
 [[package]]

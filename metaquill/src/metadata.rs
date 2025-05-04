@@ -1,13 +1,9 @@
 use lopdf::{Document, Object,content::Content};
 use regex::Regex;
 use encoding_rs::WINDOWS_1252;
-use std::collections::HashSet;
-use std::fs::File;
-use std::io::{self, BufRead};
-use std::path::Path;
-use std::sync::OnceLock;
+use tag_pdf_to_text::document;
 
-static ELSEVIER_SET: OnceLock<HashSet<String>> = OnceLock::new();
+use crate::{call::PdfMetadata, file_manager::split_name};
 
 struct TextObject{
     font_size: f32,
@@ -16,11 +12,13 @@ struct TextObject{
 
 /// Save the PDF information
 #[derive(Debug)]
-pub struct PDFStruct {
-    pub path: String,
+pub struct PdfStruct {
+    pub _path: String,
+    pub filename : String,
     pub metadata_title: String,
     pub assumed_title: String,
     pub author: Vec<String>,
+    pub api_metadata : Option<PdfMetadata>,
 }
 
 pub fn decode_bytes(bytes: &[u8]) -> String {
@@ -34,26 +32,66 @@ pub fn decode_bytes(bytes: &[u8]) -> String {
 }
 
 /// Returns the metadata for a given PDF document
-pub fn fetch_metadata(document : &Document, filepath : &str) -> PDFStruct{
+pub fn fetch_metadata(document : &Document, filepath : &str) -> PdfStruct{
     // Create a struct for metadata
-    let mut metadata = PDFStruct {
-        path: filepath.to_string(),
+    let mut pdf_obj = PdfStruct {
+        _path: filepath.to_string(),
         metadata_title: String::new(),
+        filename: String::new(),
         assumed_title: String::new(),
         author: Vec::new(),
+        api_metadata : None,
     };
     
     // Extract metadata from the file header
-    collect_title_and_author(&document, &mut metadata);
-    
-    // Read assumed title
-    metadata.assumed_title = text_to_metadata(&document);
+    collect_title_and_author(&document, &mut pdf_obj);
 
-    return metadata;
+    // Remove title if it is not a title
+    if !is_accepted_title(&pdf_obj.metadata_title){
+        pdf_obj.metadata_title = String::new();
+    }
+
+    // Read assumed title
+    pdf_obj.assumed_title = text_to_metadata(&document);
+
+    // Get filename
+    let fname = split_name(filepath).unwrap_or(String::new());
+    pdf_obj.filename = fname;
+
+    return pdf_obj;
+}
+
+/// Returns the metadata for a given PDF document
+pub fn extract_metadata(pdf : &mut document::Document, filepath : &str) -> PdfStruct{
+    let mut meta_title = String::new();
+    let mut meta_authors : Vec<String> = Vec::new();
+
+    // Get title from Info object
+    if let Some(title) = pdf.get_info("Title"){
+        meta_title = title;
+    };
+
+    // If title is invalid, it is rejected
+    if !is_accepted_title(&meta_title){
+        meta_title = String::new();
+    }
+    
+    // Get authors
+    if let Some(authors) = pdf.get_info("Author"){
+        meta_authors = split_authors(&authors);
+    };
+
+    // Get title from text
+    let assumed_title = get_probable_title(pdf);
+
+    // Get filename
+    let fname = split_name(filepath).unwrap_or(String::new());
+    
+    PdfStruct{_path : filepath.to_string(), metadata_title : meta_title, assumed_title : assumed_title, author : meta_authors, api_metadata : None, filename : fname}
 }
 
 /// Collects the Title and Author from the PDF's trailer "Info" dictionary.
-fn collect_title_and_author(document: &Document, metadata: &mut PDFStruct) {
+fn collect_title_and_author(document: &Document, metadata: &mut PdfStruct) {
     // Get the "Info" entry from the trailer, if available.
     if let Ok(Some(Object::Dictionary(dict))) = document.trailer.get(b"Info").map(|obj| match obj {
         Object::Reference(id) => document.get_dictionary(*id).ok().map(|d| Object::Dictionary(d.clone())),
@@ -90,13 +128,61 @@ fn split_authors(input: &str) -> Vec<String> {
         .collect()
 }
 
+/// Returns the most probable title from a list of Text elements
+pub fn get_probable_title(pdf : &mut document::Document) -> String{
+    let Some(mut texts) = pdf.get_text_from_page(0) else {
+        return String::new();
+    };
+    if texts.len() == 0{
+        return String::new();
+    }
+    
+    // for t in &texts {
+    //     println!("---");
+    //     println!("{}", t.chars);
+    //     println!("{}", t.scaled_font_size);
+    //     println!("{}", t.avg_font_size);
+    //     println!("{}", t.pos_y);
+    // }
+
+    // Keep all texts that can be accepted as a title
+    texts.retain(|txt| txt.avg_font_size > 5.0);
+    // texts.retain(|txt| txt.pos_y > 400.0); // Test this
+    texts.retain(|txt| is_accepted_title(&txt.chars));
+    
+
+    // Find the largest text size
+    let mut max : f64 = 0.0;
+    for txt in &texts {
+        if txt.avg_font_size > max {
+            max = txt.avg_font_size;
+        }
+    }
+    let max_lim = max * 0.9;
+    
+    // Remove everything smaller than 85% of the max text size
+    texts.retain(|txt| txt.avg_font_size > max_lim); // || txt.avg_font_size > 13.0, test this
+    
+    // If the largest font is less than 11, return the first element
+    if max < 11.0 {
+        return match texts.get(0) {
+            Some(x) => {
+                x.chars.clone()
+            }    
+            None => String::new()
+        }
+    }
+
+    // Otherwise, return the longest element
+    let Some(longest_text) = texts.iter().max_by_key(|txt| txt.chars.len()) else {
+        return String::new();
+    };
+    
+    return longest_text.chars.clone();
+}
 
 /// Assumes a title based on the text in the pdf
 pub fn text_to_metadata(doc: &Document) -> String{
-    if ELSEVIER_SET.get().is_none() {
-        init_journal_set("elsevier.txt");
-    }
-
     let mut text_objects : Vec<TextObject> = Vec::new();
     let mut current_font_size_value : f32 = 1.0;
     let mut text_scaler = 1.0;
@@ -234,35 +320,25 @@ pub fn text_to_metadata(doc: &Document) -> String{
             }
         }
     }
-    
+
+    text_objects.retain(|obj| is_accepted_title(&obj.text));
     text_objects.sort_by(|x,y| y.font_size.partial_cmp(&x.font_size).unwrap());
     text_objects.retain(|txt_obj| txt_obj.text.len() > 17);
-    text_objects.retain(|txt_obj| !contains_journal(&txt_obj.text));
     text_objects.retain(|obj| !obj.text.contains("Authorized licensed use limited to"));
     
     if let Some(first_obj) = text_objects.first() {
-        // println!("Assumed title: >{}<", first_obj.text);
         return first_obj.text.to_string();
     }
     return "".to_string();
 }
 
-fn init_journal_set<P: AsRef<Path>>(filename: P) {
-    let file = File::open(filename).expect("Failed to open file");
-    let reader = io::BufReader::new(file);
-    
-    let set: HashSet<String> = reader.lines().filter_map(Result::ok).collect();
-    ELSEVIER_SET.set(set).expect("Failed to initialize JOURNAL_SET");
-}
-
-// Funktion för att kolla om en tidskrift finns i setet
-fn contains_journal(journal: &str) -> bool {
-    let modified_str = journal.trim();
-    ELSEVIER_SET.get().map_or(false, |set| set.contains(modified_str))
-}
-
 /// Determines if a title is a title or not
 pub fn is_accepted_title(title : &str) -> bool{
+    if title.len() < 16 || title.len() > 300 {
+        return false;
+    }
+    
+    // Count each category of characters
     let mut letters = 0.0;
     let mut numbers = 0.0;
     let mut others = 0.0;
@@ -274,33 +350,37 @@ pub fn is_accepted_title(title : &str) -> bool{
         else if t.is_ascii_digit() {
             numbers += 1.0;
         }
-        else if t == ' '{
+        else if t.is_whitespace(){
             spaces += 1.0;
         }
         else{
             others += 1.0;
         }
     }
-    if spaces == 0.0{
-        return false;
-    }
-
-    let total = letters + numbers + others;
-    let avg_wlen = total / spaces;
     
-    if avg_wlen > 15.0{
-        return false;
-    }
-
-    if total < 10.0 || (total>=10.0 && spaces == 0.0){
+    // A title has to contain at least one space
+    if spaces < 1.0{
         return false;
     }
     
-    let _o_oth = others/total;
-    let o_let = letters/total;
+    let total_chars = letters + numbers + others;
+    let avg_wlen = total_chars / spaces;
+    
+    // Average word length has to be below 14
+    if avg_wlen > 14.0 ||avg_wlen < 3.0{
+        return false;
+    }
+    
+    // Number of non-space chars has to be greater than 14
+    if total_chars < 14.0{
+        return false;
+    }
+    
+    let _o_oth = others/total_chars;
+    let o_let = letters/total_chars;
+    
+    // Non-alphabetic chars musn't make up more than 30% of the title
     if o_let < 0.7{
-        // println!("L={}, N={}, O={}, S={}", letters, numbers, others, spaces);
-        // println!("OOTH={}, OLET={}", o_oth, o_let);
         return false;
     }
     return true;
