@@ -345,10 +345,7 @@ fn parse_xref_table(doc : &mut Document) -> Result<(),PdfError>{
             break;
         };
 
-        // Skip space
-        while doc.byte() == b' ' {
-            doc.it += 1;
-        }
+        doc.skip_whitespace();
         
         let Some((length, _size2)) = read_number(doc) else{
             return Err(PdfError::XrefError);
@@ -369,7 +366,9 @@ fn parse_xref_table(doc : &mut Document) -> Result<(),PdfError>{
             if num1_size != 10{
                 return Err(PdfError::XrefError);
             }
-            doc.xref[i] = ObjectRef { compressed: 1, xref : num1, _version:0};
+            if doc.xref[i].compressed == 3{
+                doc.xref[i] = ObjectRef { compressed: 1, xref : num1, _version:0};
+            }
         }
         doc.next_line();
     }

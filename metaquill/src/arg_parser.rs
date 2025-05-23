@@ -5,17 +5,18 @@ pub struct PdfData {
     pub pdfs : Vec<PdfStruct>,
     pub read : u32,
     pub fails : u32,
+    pub timeouts : u32,
     pub api_hits : u32,
     pub output_filepath : String,
     pub reader : u8, // 1 = lopdf, 0 standard
     pub make_api_call : bool,
-    pub mode : Mode,
+    pub verbose : Verbose,
     pub recursive : bool,
     pub path : String,
 }
 
 #[derive(PartialEq, Debug)]
-pub enum Mode {
+pub enum Verbose {
     Light,
     Default,
     Full,
@@ -44,8 +45,9 @@ pub fn parse_args(args : &Vec<String>) -> Option<PdfData>{
         make_api_call : true,
         recursive: false, 
         api_hits : 0,
-        mode : Mode::Default,
+        verbose : Verbose::Default,
         path : args[1].to_string(),
+        timeouts : 0,
     };
 
     let mut arg_it : usize = 2;
@@ -72,8 +74,8 @@ pub fn parse_args(args : &Vec<String>) -> Option<PdfData>{
                 };
                 pdf_data.output_filepath = next_arg.to_string();
             }
-            "-m" | "-mode" => {
-                parse_mode(&mut arg_it, &mut pdf_data, args)?;
+            "-v" | "-verbose" => {
+                parse_verbose(&mut arg_it, &mut pdf_data, args)?;
             }
             "-rec" | "-recursive" => {
                 pdf_data.recursive = true;
@@ -97,7 +99,7 @@ fn print_help(){
     println!("\t-h | -help — show help instructions");
     println!("\t-r | -reader — choose what reader to use [tag | lopdf] (default = 'tag') ");
     println!("\t-nc | -nocall — makes no api call");
-    println!("\t-m | -mode — choose mode to run in [light | default | full]");
+    println!("\t-v | -verbose — choose verbose to run [light | default | full]");
     println!("\t-o | -output — set path for json output file (default = 'output.json')");
     println!("\t-rec | -recursive — search subdirectories if encountered");
 }
@@ -129,28 +131,28 @@ fn parse_reader(it : &mut usize, pdf_data : &mut PdfData, args : &Vec<String>) -
     return Some(());
 }
 
-/// Parses argument for -mode
-fn parse_mode(it : &mut usize, pdf_data : &mut PdfData, args : &Vec<String>) -> Option<()>{
+/// Parses argument for -verbose
+fn parse_verbose(it : &mut usize, pdf_data : &mut PdfData, args : &Vec<String>) -> Option<()>{
     // Find next arg
     *it += 1;
     let Some(next_arg) = args.get(*it) else {
-        println!("No argument given for mode");
+        println!("No argument given for verbose");
         println!("Use -help to show available argument options");
         return None;
     };
     
     match next_arg.as_str() {
         "full" | "f" => {
-            pdf_data.mode = Mode::Full;
+            pdf_data.verbose = Verbose::Full;
         }
         "light" | "l" => {
-            pdf_data.mode = Mode::Light;
+            pdf_data.verbose = Verbose::Light;
         }
         "default" | "d" => {
-            pdf_data.mode = Mode::Default;
+            pdf_data.verbose = Verbose::Default;
         }
         _ => {
-            println!("Invalid argument for mode: {}", next_arg);
+            println!("Invalid argument for verbose: {}", next_arg);
             println!("Use -help to show available argument options");
             return None;
         }

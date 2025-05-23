@@ -2,7 +2,7 @@ use std::error::Error;
 use lopdf::Document;
 use tag_pdf_to_text::load_pdf_doc;
 use tokio::runtime::Runtime;
-use crate::arg_parser::{Mode, PdfData};
+use crate::arg_parser::{Verbose, PdfData};
 use crate::file_manager::load_pdf;
 use crate::metadata::{extract_metadata, fetch_metadata, PdfStruct};
 use crate::call::{call, PdfMetadata};
@@ -20,7 +20,7 @@ fn read_pdf_metadata (filepath: &str) -> Option<PdfStruct>{
 }
 
 /// Validates metadata through an API call
-fn get_api_metadata(pdf_obj : &PdfStruct, pdf_data : &PdfData) -> Result<PdfMetadata, Box<dyn Error>>{
+fn get_api_metadata(pdf_obj : &PdfStruct, pdf_data : &mut PdfData) -> Result<PdfMetadata, Box<dyn Error>>{
     // If no title exist, no call is made
     if pdf_obj.assumed_title.is_empty() && pdf_obj.metadata_title.is_empty(){
         return Err("No title found in PDF".into());
@@ -49,6 +49,7 @@ fn get_api_metadata(pdf_obj : &PdfStruct, pdf_data : &PdfData) -> Result<PdfMeta
         }
         Err(e) => {
             let err_msg = format!("Error retrieving metadata: {}", e);
+            pdf_data.timeouts += 1;
             Err(err_msg.into())
         }
     }
@@ -80,7 +81,7 @@ fn tag_read_pdf(filepath: &str, pdf_data : &mut PdfData){
             let mut pdf_meta = extract_metadata(&mut pdf, filepath);
 
             // Print title info
-            if pdf_data.mode == Mode::Full {
+            if pdf_data.verbose == Verbose::Full {
                 println!("MetaTitle = {}", pdf_meta.metadata_title);
                 println!("AssumedTitle = {}", pdf_meta.assumed_title);
             }
@@ -91,9 +92,9 @@ fn tag_read_pdf(filepath: &str, pdf_data : &mut PdfData){
             }
 
             // Make API Call
-            match get_api_metadata(&pdf_meta, &pdf_data) {
+            match get_api_metadata(&pdf_meta, pdf_data) {
                 Ok(x) => {
-                    if pdf_data.mode != Mode::Light {
+                    if pdf_data.verbose != Verbose::Light {
                         println!("Confidence score: {:.0}", x.title_confidence);
                     }
                     pdf_meta.api_metadata = Some(x);
@@ -118,7 +119,7 @@ fn lo_read_pdf(filepath: &str, pdf_data : &mut PdfData){
     // LOPDF
     match read_pdf_metadata(filepath) {
         Some(mut pdf_meta) => {
-            if pdf_data.mode == Mode::Full {
+            if pdf_data.verbose == Verbose::Full {
                 println!("MetaTitle = {}", pdf_meta.metadata_title);
                 println!("AssumedTitle = {}", pdf_meta.assumed_title);
             }
@@ -129,7 +130,7 @@ fn lo_read_pdf(filepath: &str, pdf_data : &mut PdfData){
             }
 
             // Make API Call
-            if let Err(err) = get_api_metadata(&mut pdf_meta, &pdf_data){
+            if let Err(err) = get_api_metadata(&mut pdf_meta, pdf_data){
                 println!("{}", err);
             } else {
                 pdf_data.api_hits += 1;

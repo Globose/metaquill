@@ -136,14 +136,6 @@ pub fn get_probable_title(pdf : &mut document::Document) -> String{
     if texts.len() == 0{
         return String::new();
     }
-    
-    // for t in &texts {
-    //     println!("---");
-    //     println!("{}", t.chars);
-    //     println!("{}", t.scaled_font_size);
-    //     println!("{}", t.avg_font_size);
-    //     println!("{}", t.pos_y);
-    // }
 
     // Keep all texts that can be accepted as a title
     texts.retain(|txt| txt.avg_font_size > 5.0);
@@ -321,15 +313,25 @@ pub fn text_to_metadata(doc: &Document) -> String{
         }
     }
 
-    text_objects.retain(|obj| is_accepted_title(&obj.text));
-    text_objects.sort_by(|x,y| y.font_size.partial_cmp(&x.font_size).unwrap());
-    text_objects.retain(|txt_obj| txt_obj.text.len() > 17);
-    text_objects.retain(|obj| !obj.text.contains("Authorized licensed use limited to"));
-    
-    if let Some(first_obj) = text_objects.first() {
-        return first_obj.text.to_string();
+    text_objects.retain(|txt| is_accepted_title(&txt.text));
+    text_objects.retain(|txt| txt.font_size > 5.0);
+    let max = text_objects.iter().map(|txt| txt.font_size).fold(0.0, f32::max);
+    let max_lim = max*0.9;
+    text_objects.retain(|txt| txt.font_size > max_lim);
+    if max < 11.0 {
+        return match text_objects.get(0) {
+            Some(x) => {
+                x.text.to_string()
+            }
+            None => String::new()
+        }
     }
-    return "".to_string();
+
+    let Some(longest_text) = text_objects.iter().max_by_key(|txt| txt.text.len()) else {
+        return String::new();
+    };
+
+    return longest_text.text.to_string();
 }
 
 /// Determines if a title is a title or not
@@ -364,10 +366,10 @@ pub fn is_accepted_title(title : &str) -> bool{
     }
     
     let total_chars = letters + numbers + others;
-    let avg_wlen = total_chars / spaces;
+    let avg_wlen = total_chars / (spaces+1.0);
     
-    // Average word length has to be below 14
-    if avg_wlen > 14.0 ||avg_wlen < 3.0{
+    // Average word length has to be below 14 and greater than 3
+    if avg_wlen > 14.0 || avg_wlen < 3.0{
         return false;
     }
     

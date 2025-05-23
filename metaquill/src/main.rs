@@ -25,7 +25,7 @@ fn main() {
     read_pdf_dir(&pdf_paths, &mut pdf_data);
     
     println!("---");
-    println!("Tried to read {} files, {} failed, {} api-hits", pdf_data.read, pdf_data.fails, pdf_data.api_hits);
+    println!("Tried to read {} files, {} failed, {} timeouts, {} api-hits", pdf_data.read, pdf_data.fails, pdf_data.timeouts, pdf_data.api_hits);
     
     // Output result to a json file
     if let Err(err) = export_json(&mut pdf_data){

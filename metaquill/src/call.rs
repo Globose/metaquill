@@ -1,6 +1,6 @@
 use reqwest::Client;
 use serde_json::Value;
-use crate::{arg_parser::{Mode, PdfData}, metadata::PdfStruct};
+use crate::{arg_parser::{Verbose, PdfData}, metadata::PdfStruct};
 use std::error::Error;
 use urlencoding::encode; // Import URL encoding
 use std::time::Duration;
@@ -166,7 +166,7 @@ pub async fn call(pdf_metadata: &PdfStruct, pdf_data : &PdfData) -> Result<Optio
         let request_url = format!("https://api.crossref.org/works?query.bibliographic={}", title_query);
         
         // Print URL for requset (Can be removed if print not wanted)
-        if pdf_data.mode == Mode::Full {
+        if pdf_data.verbose == Verbose::Full {
             println!("🔍 API Request URL: {}", request_url);
         }
     
