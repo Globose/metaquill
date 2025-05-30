@@ -18,8 +18,11 @@ The compiled binary will be located at target/release/metaquill.
 Usage
 
 ./metaquill path/to/document.pdf
+
 or
+
 ./metaquill path/to/directory
+
 This command will output the extracted metadata from the specified PDF file or directory in a json file.
 
 License
