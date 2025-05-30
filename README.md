@@ -26,3 +26,4 @@ or
 This command will output the extracted metadata from the specified PDF file or directory in a json file.
 
 License
+This project is licensed under the terms of the [MIT License](LICENSE).
