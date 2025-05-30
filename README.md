@@ -1,4 +1,5 @@
 MetaQuill
+
 MetaQuill is a Rust-based tool designed to extract metadata from PDF files. It provides a command-line interface to process PDFs and retrieve structured metadata efficiently.
 
 Features
